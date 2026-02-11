@@ -1,0 +1,20 @@
+# Virtual environment
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Environment variables
+.env
+
+# Chroma / vector DB storage
+chroma_db/
+data/chroma_db/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+
+
