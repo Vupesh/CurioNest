@@ -1,5 +1,6 @@
 import os
 import requests
+from services.logging_service import LoggingService
 
 
 class EmailService:
@@ -12,7 +13,7 @@ class EmailService:
             f"CurioNest <postmaster@{self.domain}>"
         )
         self.teacher_email = os.getenv("TEACHER_EMAIL")
-
+        self.logger = LoggingService()
     def send_escalation(self, subject, body):
         print("📧 Mailgun escalation triggered")
 
@@ -31,6 +32,8 @@ class EmailService:
 
             print("📨 Mailgun status:", response.status_code)
             print("📨 Mailgun response:", response.text)
-
+            self.logger.log("MAILGUN_STATUS", str(response.status_code))
+            self.logger.log("MAILGUN_RESPONSE", response.text)
+ 
         except Exception as e:
             print("❌ Mailgun exception:", str(e))

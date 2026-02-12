@@ -6,6 +6,8 @@ from data.documents import DOCUMENTS
 from engine.agent_v4 import StudentSupportAgentV4
 from engine.rag import ChromaRAGStore
 from services.email_service import EmailService
+from services.logging_service import LoggingService
+
 
 # Load environment variables
 load_dotenv()
@@ -16,6 +18,8 @@ app = Flask(__name__)
 rag_store = ChromaRAGStore(documents=DOCUMENTS)
 agent = StudentSupportAgentV4(rag_store)
 email_service = EmailService()
+logger = LoggingService()
+
 
 
 @app.route("/", methods=["GET"])
@@ -50,6 +54,7 @@ def ask_question():
         return jsonify({
             "error": "question, subject, and chapter are required"
         }), 400
+    logger.log("QUESTION_RECEIVED", question)
 
     context = {
         "subject": subject,
@@ -58,9 +63,12 @@ def ask_question():
 
     # 1️⃣ Ask engine
     result = agent.receive_question(question, context)
+    logger.log("AGENT_RESULT", result)
 
     # 2️⃣ Escalation side-effect (EMAIL LIVES HERE, NOT IN ENGINE)
     if "ESCALATE" in result:
+        logger.log("ESCALATION_TRIGGERED", result)
+
         email_service.send_escalation(
             subject=f"CurioNest Escalation | {subject} - {chapter}",
             body=f"""
