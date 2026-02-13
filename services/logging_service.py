@@ -30,7 +30,7 @@ class LoggingService:
         cursor.execute("""
         INSERT INTO logs (timestamp, event_type, details)
         VALUES (?, ?, ?)
-        """, (datetime.utcnow().isoformat(), event_type, details))
+        """, (datetime.utcnow().isoformat(), event_type, str(details)))
 
         conn.commit()
         conn.close()

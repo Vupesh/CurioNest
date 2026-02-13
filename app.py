@@ -41,9 +41,11 @@ def health():
 
 @app.route("/ask-question", methods=["POST"])
 def ask_question():
+    logger.log("REQUEST_RECEIVED", "/ask-question")
     data = request.get_json()
 
     if not data:
+        logger.log("INVALID_JSON", None)
         return jsonify({"error": "Invalid JSON"}), 400
 
     question = data.get("question")
@@ -51,23 +53,27 @@ def ask_question():
     chapter = data.get("chapter")
 
     if not question or not subject or not chapter:
+        logger.log("VALIDATION_FAILED", data)
         return jsonify({
             "error": "question, subject, and chapter are required"
         }), 400
-    logger.log("QUESTION_RECEIVED", question)
+    logger.log("QUESTION_RECEIVED", {"question": question, "subject": subject, "chapter": chapter})
 
     context = {
         "subject": subject,
         "chapter": chapter
     }
-
+    logger.log("AGENT_CALL", {
+        "component": "StudentSupportAgentV4",
+        "operation": "receive_question"
+    })
     # 1️⃣ Ask engine
     result = agent.receive_question(question, context)
-    logger.log("AGENT_RESULT", result)
+    logger.log("AGENT_DECISION", str(result))
 
     # 2️⃣ Escalation side-effect (EMAIL LIVES HERE, NOT IN ENGINE)
-    if "ESCALATE" in result:
-        logger.log("ESCALATION_TRIGGERED", result)
+    if "ESCALATE" in  str(result):
+        logger.log("ESCALATION_TRIGGERED", {"reason": str(result), "question": question, "subject": subject, "chapter": chapter})
 
         email_service.send_escalation(
             subject=f"CurioNest Escalation | {subject} - {chapter}",
