@@ -3,4 +3,4 @@ python-dotenv
 openai
 chromadb
 requests
-
+gunicorn
