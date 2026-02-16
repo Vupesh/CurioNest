@@ -41,8 +41,11 @@ def health():
 
 @app.route("/ask-question", methods=["POST"])
 def ask_question():
+
     logger.log("REQUEST_RECEIVED", "/ask-question")
-    data = request.get_json()
+
+    # ✅ Safe JSON parsing (prevents Flask crashes)
+    data = request.get_json(silent=True)
 
     if not data:
         logger.log("INVALID_JSON", None)
@@ -57,23 +60,50 @@ def ask_question():
         return jsonify({
             "error": "question, subject, and chapter are required"
         }), 400
-    logger.log("QUESTION_RECEIVED", {"question": question, "subject": subject, "chapter": chapter})
+
+    # ✅ Strict type enforcement (critical for API stability)
+    if not isinstance(question, str) or not isinstance(subject, str) or not isinstance(chapter, str):
+        logger.log("TYPE_VALIDATION_FAILED", {
+            "question_type": str(type(question)),
+            "subject_type": str(type(subject)),
+            "chapter_type": str(type(chapter))
+        })
+        return jsonify({"error": "Invalid data types"}), 400
+
+    # ✅ Input size protection (prevents abuse / latency spikes)
+    MAX_QUESTION_LENGTH = 500
+    if len(question) > MAX_QUESTION_LENGTH:
+        logger.log("QUESTION_TOO_LONG", len(question))
+        return jsonify({"error": "Question too long"}), 400
+
+    logger.log("QUESTION_RECEIVED", {
+        "question": question,
+        "subject": subject,
+        "chapter": chapter
+    })
 
     context = {
         "subject": subject,
         "chapter": chapter
     }
+
     logger.log("AGENT_CALL", {
         "component": "StudentSupportAgentV4",
         "operation": "receive_question"
     })
-    # 1️⃣ Ask engine
+
     result = agent.receive_question(question, context)
+
     logger.log("AGENT_DECISION", str(result))
 
-    # 2️⃣ Escalation side-effect (EMAIL LIVES HERE, NOT IN ENGINE)
-    if "ESCALATE" in  str(result):
-        logger.log("ESCALATION_TRIGGERED", {"reason": str(result), "question": question, "subject": subject, "chapter": chapter})
+    if "ESCALATE" in str(result):
+
+        logger.log("ESCALATION_TRIGGERED", {
+            "reason": str(result),
+            "question": question,
+            "subject": subject,
+            "chapter": chapter
+        })
 
         email_service.send_escalation(
             subject=f"CurioNest Escalation | {subject} - {chapter}",
@@ -90,10 +120,7 @@ Engine Decision:
 """
         )
 
-    # 3️⃣ Always return engine result to client
-    return jsonify({
-        "result": result
-    }), 200
+    return jsonify({"result": result}), 200
 
 
 if __name__ == "__main__":
