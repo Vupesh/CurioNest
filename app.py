@@ -88,13 +88,19 @@ def ask_question():
     }
 
     logger.log("AGENT_CALL", {
-        "component": "StudentSupportAgentV4",
-        "operation": "receive_question"
-    })
+    "component": "StudentSupportAgentV4",
+    "operation": "receive_question"
+})
 
-    result = agent.receive_question(question, context)
+# ✅ Production Safety — Exception Boundary
+    try:
+        result = agent.receive_question(question, context)
+    except Exception as e:
+         logger.log("AGENT_RUNTIME_EXCEPTION", str(e))
+    return jsonify({"error": "Internal processing failure"}), 500
 
     logger.log("AGENT_DECISION", str(result))
+
 
     if "ESCALATE" in str(result):
 
