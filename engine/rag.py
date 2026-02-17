@@ -1,5 +1,6 @@
 import chromadb
 from chromadb.config import Settings
+from services.logging_service import LoggingService
 
 
 class ChromaRAGStore:
@@ -14,6 +15,7 @@ class ChromaRAGStore:
             raise RuntimeError("ChromaDB initialization failure")
 
         self.collection = self.client.get_or_create_collection("curionest")
+        self.logger = LoggingService()
 
         try:
             self._ingest(documents)
@@ -50,6 +52,11 @@ class ChromaRAGStore:
         if not query or not subject or not chapter:
             return []
 
+        self.logger.log("RAG_SEARCH", {
+            "subject": subject,
+            "chapter": chapter
+        })
+
         try:
             res = self.collection.query(
                 query_texts=[query],
@@ -61,7 +68,8 @@ class ChromaRAGStore:
                     ]
                 }
             )
-        except Exception:
+        except Exception as e:
+            self.logger.log("RAG_FAILURE", str(e))
             return []
 
         documents = res.get("documents")
@@ -73,5 +81,7 @@ class ChromaRAGStore:
 
         if not first_result or not isinstance(first_result, list):
             return []
+
+        self.logger.log("RAG_RESULTS", len(first_result))
 
         return first_result
