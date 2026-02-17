@@ -1,24 +1,52 @@
 import os
 from openai import OpenAI
 
+
 class StudentSupportAgentV4:
     def __init__(self, rag_store):
         self.rag_store = rag_store
         self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+    # ✅ Reliability Hardened
     def receive_question(self, question, context):
-        identified = self.identify_context(question, context)
-        decision = self.decide_action(identified)
-        if decision == "RESPOND":
-            return self.respond(question, identified)
-        return self.escalate(identified["escalation_reason"])
 
+        try:
+            identified = self.identify_context(question, context)
+        except Exception:
+            return "ESCALATE TO SME: Context identification failure"
+
+        if not identified or not isinstance(identified, dict):
+            return "ESCALATE TO SME: Invalid context generated"
+
+        try:
+            decision = self.decide_action(identified)
+        except Exception:
+            return "ESCALATE TO SME: Decision engine failure"
+
+        if decision == "RESPOND":
+            try:
+                return self.respond(question, identified)
+            except Exception:
+                return "ESCALATE TO SME: Response generation failure"
+
+        return self.escalate(identified.get("escalation_reason", "Unknown reason"))
+
+    # ✅ Reliability Hardened
     def identify_context(self, question, context):
+
+        try:
+            subject = context.get("subject")
+            chapter = context.get("chapter")
+        except Exception:
+            return None
+
+        difficulty = self.detect_difficulty(question)
+
         return {
             "question": question,
-            "subject": context.get("subject"),
-            "chapter": context.get("chapter"),
-            "difficulty": self.detect_difficulty(question)
+            "subject": subject,
+            "chapter": chapter,
+            "difficulty": difficulty
         }
 
     def decide_action(self, identified):
@@ -28,13 +56,25 @@ class StudentSupportAgentV4:
         return "RESPOND"
 
     def respond(self, question, identified):
-        chunks = self.rag_store.search(question, identified["subject"], identified["chapter"])
+
+        chunks = self.rag_store.search(
+            question,
+            identified["subject"],
+            identified["chapter"]
+        )
+
         if not chunks:
             return self.escalate("No syllabus content found")
-        return self.explain_with_ai(question, chunks)
+
+        try:
+            return self.explain_with_ai(question, chunks)
+        except Exception:
+            return self.escalate("AI explanation failure")
 
     def explain_with_ai(self, question, chunks):
+
         content = "\n".join(chunks)
+
         response = self.client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
@@ -42,6 +82,7 @@ class StudentSupportAgentV4:
                 {"role": "user", "content": f"Content:\n{content}\n\nQuestion:\n{question}"}
             ]
         )
+
         return response.choices[0].message.content
 
     def escalate(self, reason):
