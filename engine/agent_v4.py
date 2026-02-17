@@ -55,6 +55,7 @@ class StudentSupportAgentV4:
             return "ESCALATE"
         return "RESPOND"
 
+    # ✅ Reliability + Confidence Hardened
     def respond(self, question, identified):
 
         chunks = self.rag_store.search(
@@ -65,6 +66,10 @@ class StudentSupportAgentV4:
 
         if not chunks:
             return self.escalate("No syllabus content found")
+
+        # ✅ Retrieval Confidence Guard (critical stability rule)
+        if len(chunks) < 2:
+            return self.escalate("Insufficient retrieval confidence")
 
         try:
             return self.explain_with_ai(question, chunks)
