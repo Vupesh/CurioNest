@@ -67,7 +67,6 @@ class StudentSupportAgentV4:
         if not chunks:
             return self.escalate("No syllabus content found")
 
-        # ✅ Retrieval Confidence Guard (critical stability rule)
         if len(chunks) < 2:
             return self.escalate("Insufficient retrieval confidence")
 
@@ -76,6 +75,7 @@ class StudentSupportAgentV4:
         except Exception:
             return self.escalate("AI explanation failure")
 
+    # ✅ Prompt Safety Hardened
     def explain_with_ai(self, question, chunks):
 
         content = "\n".join(chunks)
@@ -83,8 +83,19 @@ class StudentSupportAgentV4:
         response = self.client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "Answer ONLY from provided content."},
-                {"role": "user", "content": f"Content:\n{content}\n\nQuestion:\n{question}"}
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a strictly retrieval-bound academic assistant. "
+                        "Answer ONLY using the provided content. "
+                        "If the content is insufficient, say exactly: "
+                        "'Insufficient information in provided syllabus content.'"
+                    )
+                },
+                {
+                    "role": "user",
+                    "content": f"Content:\n{content}\n\nQuestion:\n{question}"
+                }
             ]
         )
 
