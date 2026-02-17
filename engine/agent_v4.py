@@ -1,11 +1,13 @@
 import os
 from openai import OpenAI
+from services.logging_service import LoggingService
 
 
 class StudentSupportAgentV4:
     def __init__(self, rag_store):
         self.rag_store = rag_store
         self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        self.logger = LoggingService()
 
     # ✅ Reliability Hardened
     def receive_question(self, question, context):
@@ -75,29 +77,48 @@ class StudentSupportAgentV4:
         except Exception:
             return self.escalate("AI explanation failure")
 
-    # ✅ Prompt Safety Hardened
+    # ✅ Prompt Safety + Cost Observability Hardened
     def explain_with_ai(self, question, chunks):
 
         content = "\n".join(chunks)
 
-        response = self.client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a strictly retrieval-bound academic assistant. "
-                        "Answer ONLY using the provided content. "
-                        "If the content is insufficient, say exactly: "
-                        "'Insufficient information in provided syllabus content.'"
-                    )
-                },
-                {
-                    "role": "user",
-                    "content": f"Content:\n{content}\n\nQuestion:\n{question}"
-                }
-            ]
-        )
+        self.logger.log("OPENAI_REQUEST", {
+            "model": "gpt-4o-mini"
+        })
+
+        try:
+            response = self.client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a strictly retrieval-bound academic assistant. "
+                            "Answer ONLY using the provided content. "
+                            "If the content is insufficient, say exactly: "
+                            "'Insufficient information in provided syllabus content.'"
+                        )
+                    },
+                    {
+                        "role": "user",
+                        "content": f"Content:\n{content}\n\nQuestion:\n{question}"
+                    }
+                ]
+            )
+        except Exception as e:
+            self.logger.log("OPENAI_FAILURE", str(e))
+            return self.escalate("AI processing failure")
+
+        try:
+            usage = response.usage
+            if usage:
+                self.logger.log("OPENAI_USAGE", {
+                    "prompt_tokens": usage.prompt_tokens,
+                    "completion_tokens": usage.completion_tokens,
+                    "total_tokens": usage.total_tokens
+                })
+        except Exception:
+            pass
 
         return response.choices[0].message.content
 
