@@ -8,24 +8,20 @@ from engine.rag import ChromaRAGStore
 from services.email_service import EmailService
 from services.logging_service import LoggingService
 
-# ✅ Rate limiter
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
 
-# Load environment variables
 load_dotenv()
 
 app = Flask(__name__)
 
-# ✅ Attach limiter (per-IP protection)
 limiter = Limiter(
     get_remote_address,
     app=app,
     default_limits=["10 per minute"]
 )
 
-# Initialize core components
 rag_store = ChromaRAGStore(documents=DOCUMENTS)
 agent = StudentSupportAgentV4(rag_store)
 email_service = EmailService()
@@ -50,7 +46,7 @@ def health():
 
 
 @app.route("/ask-question", methods=["POST"])
-@limiter.limit("10 per minute")  # ✅ Explicit protection
+@limiter.limit("10 per minute")
 def ask_question():
 
     logger.log("REQUEST_RECEIVED", "/ask-question")
@@ -84,6 +80,15 @@ def ask_question():
         logger.log("QUESTION_TOO_LONG", len(question))
         return jsonify({"error": "Question too long"}), 400
 
+    # ✅ Behavioural Cost Protection — Complexity Gate
+    word_count = len(question.split())
+    if word_count > 80:
+        logger.log("QUESTION_COMPLEXITY_BLOCKED", word_count)
+        return jsonify({"error": "Question too complex"}), 400
+
+    # ✅ Observability for Cost Intelligence
+    logger.log("QUESTION_SIZE", len(question))
+
     logger.log("QUESTION_RECEIVED", {
         "question": question,
         "subject": subject,
@@ -100,7 +105,6 @@ def ask_question():
         "operation": "receive_question"
     })
 
-    # ✅ CRITICAL FIX — Proper exception boundary
     try:
         result = agent.receive_question(question, context)
     except Exception as e:
