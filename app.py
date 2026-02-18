@@ -8,18 +8,28 @@ from engine.rag import ChromaRAGStore
 from services.email_service import EmailService
 from services.logging_service import LoggingService
 
+# ✅ Rate limiter
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+
 
 # Load environment variables
 load_dotenv()
 
 app = Flask(__name__)
 
+# ✅ Attach limiter (per-IP protection)
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=["10 per minute"]
+)
+
 # Initialize core components
 rag_store = ChromaRAGStore(documents=DOCUMENTS)
 agent = StudentSupportAgentV4(rag_store)
 email_service = EmailService()
 logger = LoggingService()
-
 
 
 @app.route("/", methods=["GET"])
@@ -40,11 +50,11 @@ def health():
 
 
 @app.route("/ask-question", methods=["POST"])
+@limiter.limit("10 per minute")  # ✅ Explicit protection
 def ask_question():
 
     logger.log("REQUEST_RECEIVED", "/ask-question")
 
-    # ✅ Safe JSON parsing (prevents Flask crashes)
     data = request.get_json(silent=True)
 
     if not data:
@@ -61,7 +71,6 @@ def ask_question():
             "error": "question, subject, and chapter are required"
         }), 400
 
-    # ✅ Strict type enforcement (critical for API stability)
     if not isinstance(question, str) or not isinstance(subject, str) or not isinstance(chapter, str):
         logger.log("TYPE_VALIDATION_FAILED", {
             "question_type": str(type(question)),
@@ -70,7 +79,6 @@ def ask_question():
         })
         return jsonify({"error": "Invalid data types"}), 400
 
-    # ✅ Input size protection (prevents abuse / latency spikes)
     MAX_QUESTION_LENGTH = 500
     if len(question) > MAX_QUESTION_LENGTH:
         logger.log("QUESTION_TOO_LONG", len(question))
@@ -88,19 +96,18 @@ def ask_question():
     }
 
     logger.log("AGENT_CALL", {
-    "component": "StudentSupportAgentV4",
-    "operation": "receive_question"
-})
+        "component": "StudentSupportAgentV4",
+        "operation": "receive_question"
+    })
 
-# ✅ Production Safety — Exception Boundary
+    # ✅ CRITICAL FIX — Proper exception boundary
     try:
         result = agent.receive_question(question, context)
     except Exception as e:
-         logger.log("AGENT_RUNTIME_EXCEPTION", str(e))
-    return jsonify({"error": "Internal processing failure"}), 500
+        logger.log("AGENT_RUNTIME_EXCEPTION", str(e))
+        return jsonify({"error": "Internal processing failure"}), 500
 
     logger.log("AGENT_DECISION", str(result))
-
 
     if "ESCALATE" in str(result):
 
