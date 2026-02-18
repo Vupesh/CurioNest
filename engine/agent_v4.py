@@ -77,7 +77,7 @@ class StudentSupportAgentV4:
         except Exception:
             return self.escalate("AI explanation failure")
 
-    # ✅ Prompt Safety + Cost Observability Hardened
+    # ✅ Prompt Safety + Cost Guardrail + Observability Hardened
     def explain_with_ai(self, question, chunks):
 
         content = "\n".join(chunks)
@@ -86,9 +86,15 @@ class StudentSupportAgentV4:
             "model": "gpt-4o-mini"
         })
 
+        # ✅ HARD COST GUARDRAIL (business critical)
+        self.logger.log("OPENAI_GUARDRAIL", {
+            "max_tokens": 300
+        })
+
         try:
             response = self.client.chat.completions.create(
                 model="gpt-4o-mini",
+                max_tokens=300,
                 messages=[
                     {
                         "role": "system",
