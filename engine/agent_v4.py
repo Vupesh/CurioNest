@@ -77,7 +77,7 @@ class StudentSupportAgentV4:
         except Exception:
             return self.escalate("AI explanation failure")
 
-    # ✅ Prompt Safety + Cost Guardrail + Observability Hardened
+    # ✅ Prompt Safety + Cost Guardrail + Failure Resilience (Block 4.7)
     def explain_with_ai(self, question, chunks):
 
         content = "\n".join(chunks)
@@ -86,7 +86,6 @@ class StudentSupportAgentV4:
             "model": "gpt-4o-mini"
         })
 
-        # ✅ HARD COST GUARDRAIL (business critical)
         self.logger.log("OPENAI_GUARDRAIL", {
             "max_tokens": 300
         })
@@ -109,11 +108,12 @@ class StudentSupportAgentV4:
                         "role": "user",
                         "content": f"Content:\n{content}\n\nQuestion:\n{question}"
                     }
-                ]
+                ],
+                timeout=8   # ✅ Critical production resilience control
             )
         except Exception as e:
-            self.logger.log("OPENAI_FAILURE", str(e))
-            return self.escalate("AI processing failure")
+            self.logger.log("OPENAI_TIMEOUT_OR_FAILURE", str(e))
+            return self.escalate("AI provider failure")
 
         try:
             usage = response.usage
@@ -126,7 +126,14 @@ class StudentSupportAgentV4:
         except Exception:
             pass
 
-        return response.choices[0].message.content
+        try:
+            answer = response.choices[0].message.content
+            if not answer:
+                return self.escalate("Empty AI response")
+            return answer
+        except Exception as e:
+            self.logger.log("OPENAI_RESPONSE_PARSE_FAILURE", str(e))
+            return self.escalate("AI response failure")
 
     def escalate(self, reason):
         return f"ESCALATE TO SME: {reason}"
