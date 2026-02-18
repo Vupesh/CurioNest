@@ -1,4 +1,6 @@
 import os
+import time
+import uuid
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 from data.documents import DOCUMENTS
@@ -51,6 +53,37 @@ def ask_question():
 
     logger.log("REQUEST_RECEIVED", "/ask-question")
 
+    client_ip = request.remote_addr
+    current_time = time.time()
+
+    # ✅ Session-Aware Protection (Block 4.6)
+    session_id = request.headers.get("X-Session-ID")
+
+    if not session_id:
+        session_id = str(uuid.uuid4())
+
+    if not hasattr(app, "session_memory"):
+        app.session_memory = {}
+
+    last_session_time = app.session_memory.get(session_id)
+
+    if last_session_time and (current_time - last_session_time) < 1.0:
+        logger.log("SESSION_BURST_BLOCKED", session_id)
+        return jsonify({"error": "Session request burst detected"}), 429
+
+    app.session_memory[session_id] = current_time
+
+    if not hasattr(app, "request_memory"):
+        app.request_memory = {}
+
+    last_time = app.request_memory.get(client_ip)
+
+    if last_time and (current_time - last_time) < 1.5:
+        logger.log("RATE_ANOMALY_DETECTED", client_ip)
+        return jsonify({"error": "Too many rapid requests"}), 429
+
+    app.request_memory[client_ip] = current_time
+
     data = request.get_json(silent=True)
 
     if not data:
@@ -80,13 +113,25 @@ def ask_question():
         logger.log("QUESTION_TOO_LONG", len(question))
         return jsonify({"error": "Question too long"}), 400
 
-    # ✅ Behavioural Cost Protection — Complexity Gate
     word_count = len(question.split())
     if word_count > 80:
         logger.log("QUESTION_COMPLEXITY_BLOCKED", word_count)
         return jsonify({"error": "Question too complex"}), 400
 
-    # ✅ Observability for Cost Intelligence
+    if not hasattr(app, "question_memory"):
+        app.question_memory = {}
+
+    last_question = app.question_memory.get(client_ip)
+
+    if last_question and last_question == question.strip().lower():
+        logger.log("DUPLICATE_QUESTION_BLOCKED", {
+            "ip": client_ip,
+            "question": question
+        })
+        return jsonify({"error": "Duplicate question detected"}), 429
+
+    app.question_memory[client_ip] = question.strip().lower()
+
     logger.log("QUESTION_SIZE", len(question))
 
     logger.log("QUESTION_RECEIVED", {
@@ -137,7 +182,10 @@ Engine Decision:
 """
         )
 
-    return jsonify({"result": result}), 200
+    response = jsonify({"result": result})
+    response.headers["X-Session-ID"] = session_id
+
+    return response, 200
 
 
 if __name__ == "__main__":
