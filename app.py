@@ -3,8 +3,9 @@ import time
 import uuid
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
-from data.documents import DOCUMENTS
+from flask_cors import CORS
 
+from data.documents import DOCUMENTS
 from engine.agent_v4 import StudentSupportAgentV4
 from engine.rag import ChromaRAGStore
 from services.email_service import EmailService
@@ -17,6 +18,7 @@ from flask_limiter.util import get_remote_address
 load_dotenv()
 
 app = Flask(__name__)
+CORS(app)  # ✅ REQUIRED for React ↔ Flask communication
 
 limiter = Limiter(
     get_remote_address,
@@ -56,9 +58,7 @@ def ask_question():
     client_ip = request.remote_addr
     current_time = time.time()
 
-    # ✅ Session-Aware Protection (Block 4.6)
     session_id = request.headers.get("X-Session-ID")
-
     if not session_id:
         session_id = str(uuid.uuid4())
 
@@ -66,7 +66,6 @@ def ask_question():
         app.session_memory = {}
 
     last_session_time = app.session_memory.get(session_id)
-
     if last_session_time and (current_time - last_session_time) < 1.0:
         logger.log("SESSION_BURST_BLOCKED", session_id)
         return jsonify({"error": "Session request burst detected"}), 429
@@ -77,7 +76,6 @@ def ask_question():
         app.request_memory = {}
 
     last_time = app.request_memory.get(client_ip)
-
     if last_time and (current_time - last_time) < 1.5:
         logger.log("RATE_ANOMALY_DETECTED", client_ip)
         return jsonify({"error": "Too many rapid requests"}), 429
@@ -85,7 +83,6 @@ def ask_question():
     app.request_memory[client_ip] = current_time
 
     data = request.get_json(silent=True)
-
     if not data:
         logger.log("INVALID_JSON", None)
         return jsonify({"error": "Invalid JSON"}), 400
@@ -121,19 +118,19 @@ def ask_question():
     if not hasattr(app, "question_memory"):
         app.question_memory = {}
 
+    normalized_question = question.strip().lower()
     last_question = app.question_memory.get(client_ip)
 
-    if last_question and last_question == question.strip().lower():
+    if last_question and last_question == normalized_question:
         logger.log("DUPLICATE_QUESTION_BLOCKED", {
             "ip": client_ip,
             "question": question
         })
         return jsonify({"error": "Duplicate question detected"}), 429
 
-    app.question_memory[client_ip] = question.strip().lower()
+    app.question_memory[client_ip] = normalized_question
 
     logger.log("QUESTION_SIZE", len(question))
-
     logger.log("QUESTION_RECEIVED", {
         "question": question,
         "subject": subject,
@@ -159,7 +156,6 @@ def ask_question():
     logger.log("AGENT_DECISION", str(result))
 
     if "ESCALATE" in str(result):
-
         logger.log("ESCALATION_TRIGGERED", {
             "reason": str(result),
             "question": question,
