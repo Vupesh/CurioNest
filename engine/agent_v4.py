@@ -1,6 +1,7 @@
 import os
 from openai import OpenAI
 from services.logging_service import LoggingService
+from budget_guard import check_and_update
 
 
 class StudentSupportAgentV4:
@@ -9,7 +10,6 @@ class StudentSupportAgentV4:
         self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.logger = LoggingService()
 
-    # ✅ Reliability Hardened
     def receive_question(self, question, context):
 
         try:
@@ -33,7 +33,6 @@ class StudentSupportAgentV4:
 
         return self.escalate(identified.get("escalation_reason", "Unknown reason"))
 
-    # ✅ Reliability Hardened
     def identify_context(self, question, context):
 
         try:
@@ -57,7 +56,6 @@ class StudentSupportAgentV4:
             return "ESCALATE"
         return "RESPOND"
 
-    # ✅ Reliability + Confidence Hardened
     def respond(self, question, identified):
 
         chunks = self.rag_store.search(
@@ -77,10 +75,24 @@ class StudentSupportAgentV4:
         except Exception:
             return self.escalate("AI explanation failure")
 
-    # ✅ Prompt Safety + Cost Guardrail + Failure Resilience (Block 4.7)
     def explain_with_ai(self, question, chunks):
 
         content = "\n".join(chunks)
+
+        # ✅ Context Size Kill-Switch (Per-Request Cost Safety)
+        approx_tokens = len(content.split()) * 1.3
+
+        if approx_tokens > 1200:
+            self.logger.log("OPENAI_COST_BLOCKED", {
+                "approx_tokens": approx_tokens
+            })
+            return self.escalate("Context too large for safe processing")
+
+        # ✅ Atomic Budget Check (Race-Condition Safe)
+        exceeded, reason = check_and_update(0)
+        if exceeded:
+            self.logger.log("BUDGET_BLOCKED", reason)
+            return self.escalate(reason)
 
         self.logger.log("OPENAI_REQUEST", {
             "model": "gpt-4o-mini"
@@ -109,7 +121,7 @@ class StudentSupportAgentV4:
                         "content": f"Content:\n{content}\n\nQuestion:\n{question}"
                     }
                 ],
-                timeout=8   # ✅ Critical production resilience control
+                timeout=8
             )
         except Exception as e:
             self.logger.log("OPENAI_TIMEOUT_OR_FAILURE", str(e))
@@ -123,6 +135,10 @@ class StudentSupportAgentV4:
                     "completion_tokens": usage.completion_tokens,
                     "total_tokens": usage.total_tokens
                 })
+
+                # ✅ Atomic Counter Update (Critical)
+                check_and_update(usage.total_tokens)
+
         except Exception:
             pass
 
