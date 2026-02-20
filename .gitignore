@@ -16,5 +16,9 @@ data/chroma_db/
 .DS_Store
 Thumbs.db
 
+# SQLite databases (CRITICAL)
+*.db
+*.sqlite
+*.sqlite3
 
 
