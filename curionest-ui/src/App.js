@@ -75,20 +75,30 @@ function interpretResponse(raw) {
   return { text: raw, type: "ai" };
 }
 
-/* ✅ Axios Error Normalizer */
+/* ✅ Block 8.20 — Deterministic Network Failure Classifier */
 function interpretAxiosError(err) {
-  if (err.response && err.response.data && err.response.data.error) {
-    return interpretResponse(err.response.data.error);
-  }
+  if (err.response) {
+    if (err.response.data && err.response.data.error) {
+      return interpretResponse(err.response.data.error);
+    }
 
-  if (err.response && err.response.status === 429) {
     return {
-      text: "You just asked this question. Try modifying it slightly.",
+      text: `Server error (${err.response.status})`,
       type: "system"
     };
   }
 
-  return { text: "Server unreachable", type: "system" };
+  if (err.request) {
+    return {
+      text: "Backend not responding",
+      type: "system"
+    };
+  }
+
+  return {
+    text: "Request failed",
+    type: "system"
+  };
 }
 
 function StructuredAnswer({ text }) {
@@ -111,7 +121,6 @@ function App() {
   const [thinkingDots, setThinkingDots] = useState("");
   const [history, setHistory] = useState([]);
 
-  /* ✅ Persistent Memory Load */
   useEffect(() => {
     const stored = localStorage.getItem("curionest_history");
     if (stored) {
@@ -123,12 +132,10 @@ function App() {
     }
   }, []);
 
-  /* ✅ Persistent Memory Save */
   useEffect(() => {
     localStorage.setItem("curionest_history", JSON.stringify(history));
   }, [history]);
 
-  /* ✅ Stable cyclic thinking animation */
   useEffect(() => {
     if (!loading) return;
 
@@ -154,14 +161,9 @@ function App() {
 
   const clearHistory = () => {
     if (loading) return;
-
     setHistory([]);
     localStorage.removeItem("curionest_history");
-
-    setResponse({
-      text: "Conversation history cleared.",
-      type: "system"
-    });
+    setResponse({ text: "Conversation history cleared.", type: "system" });
   };
 
   const askQuestion = async () => {
@@ -221,38 +223,13 @@ function App() {
       ? `Thinking${thinkingDots}`
       : response.text;
 
-  /* ✅ Block 8.19 — Severity Hierarchy */
   const responseStyle = {
     padding: 14,
     borderRadius: 8,
     minHeight: 120,
     marginTop: 12,
-    transition: "all 0.2s ease",
-
-    border:
-      response.type === "ai"
-        ? "1px solid #d5dbdb"
-        : response.type === "system"
-        ? "1px solid #ccd1d1"
-        : "1px solid #e67e22",
-
-    background:
-      response.type === "ai"
-        ? "#fbfcfc"
-        : response.type === "system"
-        ? "#f4f6f7"
-        : "#fdf2e9",
-
-    boxShadow:
-      response.type === "escalation"
-        ? "0 2px 6px rgba(230, 126, 34, 0.15)"
-        : "none"
-  };
-
-  const inputStyle = {
-    width: "100%",
-    opacity: loading ? 0.6 : 1,
-    cursor: loading ? "not-allowed" : "pointer"
+    border: "1px solid #d5dbdb",
+    background: "#fbfcfc"
   };
 
   return (
@@ -264,7 +241,6 @@ function App() {
         value={subject}
         onChange={(e) => !loading && handleSubjectChange(e.target.value)}
         disabled={loading}
-        style={inputStyle}
       >
         {Object.keys(SUBJECTS).map((subj) => (
           <option key={subj} value={subj}>{subj}</option>
@@ -278,7 +254,6 @@ function App() {
         value={chapter}
         onChange={(e) => !loading && setChapter(e.target.value)}
         disabled={loading}
-        style={inputStyle}
       >
         {SUBJECTS[subject].map((chap) => (
           <option key={chap} value={chap}>{chap}</option>
@@ -293,7 +268,7 @@ function App() {
         onChange={(e) => !loading && setQuestion(e.target.value)}
         rows={3}
         disabled={loading}
-        style={{ ...inputStyle, cursor: loading ? "not-allowed" : "text" }}
+        style={{ width: "100%" }}
       />
 
       <br /><br />
@@ -303,20 +278,18 @@ function App() {
       </button>
 
       {history.length > 0 && (
-        <button onClick={() => !loading && clearHistory()} disabled={loading} style={{ marginLeft: 10 }}>
+        <button onClick={clearHistory} style={{ marginLeft: 10 }}>
           Clear History
         </button>
       )}
 
-      <div style={{ marginTop: 20, fontSize: 14, color: "#555" }}>
+      <div style={{ marginTop: 20 }}>
         <b>Context:</b> {subject} → {chapter}
       </div>
 
       <div style={responseStyle}>
-        <div style={{ marginBottom: 6, fontWeight: "bold" }}>
-          {headerLabel}
-        </div>
-        <div>
+        <div style={{ fontWeight: "bold" }}>{headerLabel}</div>
+        <div style={{ marginTop: 8 }}>
           {response.type === "ai"
             ? <StructuredAnswer text={displayText} />
             : displayText}
@@ -330,7 +303,7 @@ function App() {
             <div
               key={idx}
               onClick={() => !loading && recallInteraction(item)}
-              style={{ marginTop: 10, cursor: loading ? "not-allowed" : "pointer" }}
+              style={{ marginTop: 10, cursor: "pointer" }}
             >
               <div><b>Q:</b> {item.question}</div>
               <div style={{ fontSize: 12, color: "#666" }}>
