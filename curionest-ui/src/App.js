@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from "react";
 import axios from "axios";
 
-const API_BASE = process.env.REACT_APP_API_BASE || "";
+/* ✅ Safe fallback prevents broken API calls */
+const API_BASE = process.env.REACT_APP_API_BASE || "http://127.0.0.1:5000";
 
 const SUBJECTS = {
   Physics: ["Laws of Motion", "Work Energy Power", "Gravitation"],
@@ -74,6 +75,7 @@ function interpretResponse(raw) {
   return { text: raw, type: "ai" };
 }
 
+/* ✅ Axios Error Normalizer */
 function interpretAxiosError(err) {
   if (err.response && err.response.data && err.response.data.error) {
     return interpretResponse(err.response.data.error);
@@ -109,6 +111,7 @@ function App() {
   const [thinkingDots, setThinkingDots] = useState("");
   const [history, setHistory] = useState([]);
 
+  /* ✅ Persistent Memory Load */
   useEffect(() => {
     const stored = localStorage.getItem("curionest_history");
     if (stored) {
@@ -120,10 +123,12 @@ function App() {
     }
   }, []);
 
+  /* ✅ Persistent Memory Save */
   useEffect(() => {
     localStorage.setItem("curionest_history", JSON.stringify(history));
   }, [history]);
 
+  /* ✅ Stable cyclic thinking animation */
   useEffect(() => {
     if (!loading) return;
 
