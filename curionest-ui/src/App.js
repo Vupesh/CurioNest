@@ -240,7 +240,8 @@ function App() {
 
   const inputStyle = {
     width: "100%",
-    opacity: loading ? 0.6 : 1
+    opacity: loading ? 0.6 : 1,
+    cursor: loading ? "not-allowed" : "pointer"
   };
 
   return (
@@ -250,7 +251,7 @@ function App() {
       <label><b>Subject</b></label><br />
       <select
         value={subject}
-        onChange={(e) => handleSubjectChange(e.target.value)}
+        onChange={(e) => !loading && handleSubjectChange(e.target.value)}
         disabled={loading}
         style={inputStyle}
       >
@@ -281,7 +282,7 @@ function App() {
         onChange={(e) => !loading && setQuestion(e.target.value)}
         rows={3}
         disabled={loading}
-        style={inputStyle}
+        style={{ ...inputStyle, cursor: loading ? "not-allowed" : "text" }}
       />
 
       <br /><br />
@@ -291,7 +292,7 @@ function App() {
       </button>
 
       {history.length > 0 && (
-        <button onClick={clearHistory} disabled={loading} style={{ marginLeft: 10 }}>
+        <button onClick={() => !loading && clearHistory()} disabled={loading} style={{ marginLeft: 10 }}>
           Clear History
         </button>
       )}
@@ -315,8 +316,8 @@ function App() {
           {history.map((item, idx) => (
             <div
               key={idx}
-              onClick={() => recallInteraction(item)}
-              style={{ marginTop: 10, cursor: "pointer" }}
+              onClick={() => !loading && recallInteraction(item)}
+              style={{ marginTop: 10, cursor: loading ? "not-allowed" : "pointer" }}
             >
               <div><b>Q:</b> {item.question}</div>
               <div style={{ fontSize: 12, color: "#666" }}>
