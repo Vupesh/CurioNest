@@ -37,34 +37,6 @@ function interpretResponse(raw) {
     };
   }
 
-  if (raw.includes("Question too long")) {
-    return {
-      text: "Your question is too long. Please make it shorter and clearer.",
-      type: "system"
-    };
-  }
-
-  if (raw.includes("Question too complex")) {
-    return {
-      text: "Your question seems too complex. Please simplify it.",
-      type: "system"
-    };
-  }
-
-  if (raw.includes("Daily token budget exceeded")) {
-    return {
-      text: "The system has reached its usage limit for today. Please try later.",
-      type: "system"
-    };
-  }
-
-  if (raw.includes("Hourly token budget exceeded")) {
-    return {
-      text: "The system is temporarily busy. Please retry shortly.",
-      type: "system"
-    };
-  }
-
   if (raw.includes("ESCALATE TO SME")) {
     return {
       text: "This question requires teacher assistance. It will be reviewed.",
@@ -75,7 +47,7 @@ function interpretResponse(raw) {
   return { text: raw, type: "ai" };
 }
 
-/* ✅ Block 8.20 — Deterministic Network Failure Classifier */
+/* ✅ Deterministic Network Failure Classifier (Block 8.20) */
 function interpretAxiosError(err) {
   if (err.response) {
     if (err.response.data && err.response.data.error) {
@@ -120,6 +92,9 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [thinkingDots, setThinkingDots] = useState("");
   const [history, setHistory] = useState([]);
+
+  /* ✅ Block 8.21 — Active Request Controller */
+  const [abortController, setAbortController] = useState(null);
 
   useEffect(() => {
     const stored = localStorage.getItem("curionest_history");
@@ -174,6 +149,14 @@ function App() {
       return;
     }
 
+    /* ✅ Cancel previous request */
+    if (abortController) {
+      abortController.abort();
+    }
+
+    const controller = new AbortController();
+    setAbortController(controller);
+
     const snapshot = { question, subject, chapter };
 
     setLoading(true);
@@ -181,11 +164,17 @@ function App() {
     setResponse({ text: "Thinking", type: "system" });
 
     try {
-      const res = await axios.post(`${API_BASE}/ask-question`, {
-        question,
-        subject,
-        chapter
-      });
+      const res = await axios.post(
+        `${API_BASE}/ask-question`,
+        {
+          question,
+          subject,
+          chapter
+        },
+        {
+          signal: controller.signal
+        }
+      );
 
       const interpreted = interpretResponse(res.data.result);
       setResponse(interpreted);
@@ -203,6 +192,10 @@ function App() {
       setQuestion("");
 
     } catch (err) {
+      if (err.name === "CanceledError" || err.code === "ERR_CANCELED") {
+        return;
+      }
+
       setResponse(interpretAxiosError(err));
     }
 
@@ -222,15 +215,6 @@ function App() {
     loading && response.text === "Thinking"
       ? `Thinking${thinkingDots}`
       : response.text;
-
-  const responseStyle = {
-    padding: 14,
-    borderRadius: 8,
-    minHeight: 120,
-    marginTop: 12,
-    border: "1px solid #d5dbdb",
-    background: "#fbfcfc"
-  };
 
   return (
     <div style={{ padding: 40, fontFamily: "Arial", maxWidth: 700 }}>
@@ -287,7 +271,7 @@ function App() {
         <b>Context:</b> {subject} → {chapter}
       </div>
 
-      <div style={responseStyle}>
+      <div style={{ padding: 14, border: "1px solid #d5dbdb", marginTop: 12 }}>
         <div style={{ fontWeight: "bold" }}>{headerLabel}</div>
         <div style={{ marginTop: 8 }}>
           {response.type === "ai"
