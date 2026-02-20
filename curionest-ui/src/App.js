@@ -221,21 +221,32 @@ function App() {
       ? `Thinking${thinkingDots}`
       : response.text;
 
+  /* ✅ Block 8.19 — Severity Hierarchy */
   const responseStyle = {
-    padding: 12,
-    borderRadius: 6,
+    padding: 14,
+    borderRadius: 8,
     minHeight: 120,
-    marginTop: 10,
+    marginTop: 12,
+    transition: "all 0.2s ease",
+
     border:
-      response.type === "escalation"
-        ? "1px solid #e67e22"
-        : "1px solid #ddd",
+      response.type === "ai"
+        ? "1px solid #d5dbdb"
+        : response.type === "system"
+        ? "1px solid #ccd1d1"
+        : "1px solid #e67e22",
+
     background:
-      response.type === "escalation"
-        ? "#fdf2e9"
+      response.type === "ai"
+        ? "#fbfcfc"
         : response.type === "system"
         ? "#f4f6f7"
-        : "#f9f9f9"
+        : "#fdf2e9",
+
+    boxShadow:
+      response.type === "escalation"
+        ? "0 2px 6px rgba(230, 126, 34, 0.15)"
+        : "none"
   };
 
   const inputStyle = {
@@ -302,8 +313,10 @@ function App() {
       </div>
 
       <div style={responseStyle}>
-        <b>{headerLabel}</b>
-        <div style={{ marginTop: 8 }}>
+        <div style={{ marginBottom: 6, fontWeight: "bold" }}>
+          {headerLabel}
+        </div>
+        <div>
           {response.type === "ai"
             ? <StructuredAnswer text={displayText} />
             : displayText}
