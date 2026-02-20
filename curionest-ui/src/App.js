@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from "react";
 import axios from "axios";
 
+const API_BASE = process.env.REACT_APP_API_BASE || "";
+
 const SUBJECTS = {
   Physics: ["Laws of Motion", "Work Energy Power", "Gravitation"],
   Chemistry: ["Atomic Structure", "Chemical Bonding"],
@@ -72,7 +74,6 @@ function interpretResponse(raw) {
   return { text: raw, type: "ai" };
 }
 
-/* ✅ Axios Error Normalizer (Duplicate UX Patch) */
 function interpretAxiosError(err) {
   if (err.response && err.response.data && err.response.data.error) {
     return interpretResponse(err.response.data.error);
@@ -108,7 +109,6 @@ function App() {
   const [thinkingDots, setThinkingDots] = useState("");
   const [history, setHistory] = useState([]);
 
-  /* ✅ Load Persistent Memory */
   useEffect(() => {
     const stored = localStorage.getItem("curionest_history");
     if (stored) {
@@ -120,12 +120,10 @@ function App() {
     }
   }, []);
 
-  /* ✅ Persist Memory */
   useEffect(() => {
     localStorage.setItem("curionest_history", JSON.stringify(history));
   }, [history]);
 
-  /* ✅ Thinking Animation */
   useEffect(() => {
     if (!loading) return;
 
@@ -149,7 +147,6 @@ function App() {
     setChapter(item.chapter);
   };
 
-  /* ✅ Clear History (Block 8.16) */
   const clearHistory = () => {
     if (loading) return;
 
@@ -177,7 +174,7 @@ function App() {
     setResponse({ text: "Thinking", type: "system" });
 
     try {
-      const res = await axios.post("http://127.0.0.1:5000/ask-question", {
+      const res = await axios.post(`${API_BASE}/ask-question`, {
         question,
         subject,
         chapter
@@ -314,10 +311,7 @@ function App() {
             <div
               key={idx}
               onClick={() => recallInteraction(item)}
-              style={{
-                marginTop: 10,
-                cursor: "pointer"
-              }}
+              style={{ marginTop: 10, cursor: "pointer" }}
             >
               <div><b>Q:</b> {item.question}</div>
               <div style={{ fontSize: 12, color: "#666" }}>
