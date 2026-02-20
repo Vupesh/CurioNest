@@ -20,35 +20,72 @@ function interpretResponse(raw) {
     };
   }
 
-  if (raw.includes("Duplicate question")) {
-    return { text: "You just asked this question. Try modifying it slightly.", type: "system" };
+  if (raw.includes("Duplicate")) {
+    return {
+      text: "You just asked this question. Try modifying it slightly.",
+      type: "system"
+    };
   }
 
   if (raw.includes("Too many rapid requests")) {
-    return { text: "You're asking questions too quickly. Please wait a moment.", type: "system" };
+    return {
+      text: "You're asking questions too quickly. Please wait a moment.",
+      type: "system"
+    };
   }
 
   if (raw.includes("Question too long")) {
-    return { text: "Your question is too long. Please make it shorter and clearer.", type: "system" };
+    return {
+      text: "Your question is too long. Please make it shorter and clearer.",
+      type: "system"
+    };
   }
 
   if (raw.includes("Question too complex")) {
-    return { text: "Your question seems too complex. Please simplify it.", type: "system" };
+    return {
+      text: "Your question seems too complex. Please simplify it.",
+      type: "system"
+    };
   }
 
   if (raw.includes("Daily token budget exceeded")) {
-    return { text: "The system has reached its usage limit for today. Please try later.", type: "system" };
+    return {
+      text: "The system has reached its usage limit for today. Please try later.",
+      type: "system"
+    };
   }
 
   if (raw.includes("Hourly token budget exceeded")) {
-    return { text: "The system is temporarily busy. Please retry shortly.", type: "system" };
+    return {
+      text: "The system is temporarily busy. Please retry shortly.",
+      type: "system"
+    };
   }
 
   if (raw.includes("ESCALATE TO SME")) {
-    return { text: "This question requires teacher assistance. It will be reviewed.", type: "escalation" };
+    return {
+      text: "This question requires teacher assistance. It will be reviewed.",
+      type: "escalation"
+    };
   }
 
   return { text: raw, type: "ai" };
+}
+
+/* ✅ Axios Error Normalizer (Duplicate UX Patch) */
+function interpretAxiosError(err) {
+  if (err.response && err.response.data && err.response.data.error) {
+    return interpretResponse(err.response.data.error);
+  }
+
+  if (err.response && err.response.status === 429) {
+    return {
+      text: "You just asked this question. Try modifying it slightly.",
+      type: "system"
+    };
+  }
+
+  return { text: "Server unreachable", type: "system" };
 }
 
 function StructuredAnswer({ text }) {
@@ -71,6 +108,24 @@ function App() {
   const [thinkingDots, setThinkingDots] = useState("");
   const [history, setHistory] = useState([]);
 
+  /* ✅ Load Persistent Memory */
+  useEffect(() => {
+    const stored = localStorage.getItem("curionest_history");
+    if (stored) {
+      try {
+        setHistory(JSON.parse(stored));
+      } catch {
+        localStorage.removeItem("curionest_history");
+      }
+    }
+  }, []);
+
+  /* ✅ Persist Memory */
+  useEffect(() => {
+    localStorage.setItem("curionest_history", JSON.stringify(history));
+  }, [history]);
+
+  /* ✅ Thinking Animation */
   useEffect(() => {
     if (!loading) return;
 
@@ -87,9 +142,24 @@ function App() {
     setChapter(SUBJECTS[value][0]);
   };
 
-  const recallQuestion = (q) => {
+  const recallInteraction = (item) => {
     if (loading) return;
-    setQuestion(q);     // ✅ Clickable memory behaviour
+    setQuestion(item.question);
+    setSubject(item.subject);
+    setChapter(item.chapter);
+  };
+
+  /* ✅ Clear History (Block 8.16) */
+  const clearHistory = () => {
+    if (loading) return;
+
+    setHistory([]);
+    localStorage.removeItem("curionest_history");
+
+    setResponse({
+      text: "Conversation history cleared.",
+      type: "system"
+    });
   };
 
   const askQuestion = async () => {
@@ -100,7 +170,7 @@ function App() {
       return;
     }
 
-    const userQuestion = question;
+    const snapshot = { question, subject, chapter };
 
     setLoading(true);
     setThinkingDots(".");
@@ -117,18 +187,19 @@ function App() {
       setResponse(interpreted);
 
       setHistory(prev => [
-        { question: userQuestion, answer: interpreted.text },
+        {
+          question: snapshot.question,
+          subject: snapshot.subject,
+          chapter: snapshot.chapter,
+          answer: interpreted.text
+        },
         ...prev
       ].slice(0, 5));
 
       setQuestion("");
 
     } catch (err) {
-      if (err.response && err.response.data && err.response.data.error) {
-        setResponse(interpretResponse(err.response.data.error));
-      } else {
-        setResponse({ text: "Server unreachable", type: "system" });
-      }
+      setResponse(interpretAxiosError(err));
     }
 
     setLoading(false);
@@ -204,7 +275,6 @@ function App() {
 
       <label><b>Question</b></label><br />
       <textarea
-        placeholder="Enter your question"
         value={question}
         onChange={(e) => !loading && setQuestion(e.target.value)}
         rows={3}
@@ -214,17 +284,15 @@ function App() {
 
       <br /><br />
 
-      <button
-        onClick={askQuestion}
-        disabled={loading || isQuestionEmpty}
-        style={{
-          padding: "8px 16px",
-          cursor: (loading || isQuestionEmpty) ? "not-allowed" : "pointer",
-          opacity: (loading || isQuestionEmpty) ? 0.6 : 1
-        }}
-      >
+      <button onClick={askQuestion} disabled={loading || isQuestionEmpty}>
         {loading ? "Processing..." : "Ask"}
       </button>
+
+      {history.length > 0 && (
+        <button onClick={clearHistory} disabled={loading} style={{ marginLeft: 10 }}>
+          Clear History
+        </button>
+      )}
 
       <div style={{ marginTop: 20, fontSize: 14, color: "#555" }}>
         <b>Context:</b> {subject} → {chapter}
@@ -239,25 +307,23 @@ function App() {
         </div>
       </div>
 
-      {/* ✅ Clickable Conversation History */}
       {history.length > 0 && (
         <div style={{ marginTop: 30 }}>
           <b>Recent Questions</b>
           {history.map((item, idx) => (
             <div
               key={idx}
-              onClick={() => recallQuestion(item.question)}
+              onClick={() => recallInteraction(item)}
               style={{
                 marginTop: 10,
-                padding: 10,
-                border: "1px solid #eee",
-                borderRadius: 6,
-                background: "#fafafa",
                 cursor: "pointer"
               }}
             >
               <div><b>Q:</b> {item.question}</div>
-              <div style={{ marginTop: 4 }}><b>A:</b> {item.answer}</div>
+              <div style={{ fontSize: 12, color: "#666" }}>
+                Context: {item.subject} → {item.chapter}
+              </div>
+              <div><b>A:</b> {item.answer}</div>
             </div>
           ))}
         </div>
