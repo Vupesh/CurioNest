@@ -22,7 +22,7 @@ def ingest_document(file_path, subject, chapter, source, version):
         c.metadata = {
             "subject": subject,
             "chapter": chapter,
-            "source": source,
+            "source":  source,
             "version": version
         }
 
