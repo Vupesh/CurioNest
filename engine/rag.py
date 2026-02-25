@@ -3,6 +3,31 @@ from chromadb.config import Settings
 from services.logging_service import LoggingService
 
 
+MAX_DISTANCE_CAP = 0.40          # absolute safety ceiling
+BEST_MATCH_MARGIN = 0.05         # adaptive margin
+COHERENCE_SPREAD_LIMIT = 0.12    # chunk consistency guard
+CONFIDENCE_DIVISOR = 0.40        # scoring normalization
+
+
+def chunks_are_coherent(distances, spread_limit=COHERENCE_SPREAD_LIMIT):
+    if len(distances) < 2:
+        return True
+    return (max(distances) - min(distances)) < spread_limit
+
+
+def retrieval_score(distances, divisor=CONFIDENCE_DIVISOR):
+    if not distances:
+        return 0.0
+    avg = sum(distances) / len(distances)
+    return max(0.0, 1 - (avg / divisor))
+
+
+def lexical_overlap(query, chunk, min_hits=2):
+    query_terms = set(query.lower().split())
+    chunk_terms = set(chunk.lower().split())
+    return len(query_terms.intersection(chunk_terms)) >= min_hits
+
+
 class ChromaRAGStore:
     def __init__(self, documents):
 
@@ -45,7 +70,7 @@ class ChromaRAGStore:
                     }]
                 )
             except Exception:
-                continue  # Skip bad documents safely
+                continue
 
     def search(self, query, subject, chapter, k=3):
 
@@ -61,6 +86,7 @@ class ChromaRAGStore:
             res = self.collection.query(
                 query_texts=[query],
                 n_results=k,
+                include=["documents", "distances"],
                 where={
                     "$and": [
                         {"subject": subject},
@@ -73,15 +99,46 @@ class ChromaRAGStore:
             return []
 
         documents = res.get("documents")
+        distances = res.get("distances")
 
-        if not documents or not isinstance(documents, list):
+        if not documents or not distances:
             return []
 
-        first_result = documents[0]
+        docs = documents[0]
+        dists = distances[0]
 
-        if not first_result or not isinstance(first_result, list):
+        if not docs:
             return []
 
-        self.logger.log("RAG_RESULTS", len(first_result))
+        best_distance = min(dists)
+        dynamic_threshold = min(best_distance + BEST_MATCH_MARGIN, MAX_DISTANCE_CAP)
 
-        return first_result
+        filtered_chunks = []
+        filtered_distances = []
+
+        for doc, dist in zip(docs, dists):
+
+            if dist > dynamic_threshold:
+                continue
+
+            if not lexical_overlap(query, doc):
+                continue
+
+            filtered_chunks.append(doc)
+            filtered_distances.append(dist)
+
+        score = retrieval_score(filtered_distances)
+        coherent = chunks_are_coherent(filtered_distances)
+
+        self.logger.log("RAG_DIAGNOSTICS", {
+            "best_distance": best_distance,
+            "dynamic_threshold": dynamic_threshold,
+            "filtered_count": len(filtered_chunks),
+            "retrieval_score": score,
+            "coherent": coherent
+        })
+
+        if not filtered_chunks:
+            return []
+
+        return filtered_chunks
