@@ -20,10 +20,10 @@ def ingest_document(file_path, subject, chapter, source, version):
 
     for c in chunks:
         c.metadata = {
-            "subject": subject,
-            "chapter": chapter,
-            "source":  source,
-            "version": version
+            "subject": subject.strip(),
+            "chapter": chapter.strip(),
+            "source": source.strip().lower(),
+            "version": version.strip().lower()
         }
 
     Chroma.from_documents(
