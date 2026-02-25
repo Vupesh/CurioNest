@@ -4,6 +4,9 @@ from services.logging_service import LoggingService
 from budget_guard import check_and_update
 
 
+MIN_RETRIEVAL_SCORE = 0.60
+
+
 class StudentSupportAgentV4:
     def __init__(self, rag_store):
         self.rag_store = rag_store
@@ -65,9 +68,13 @@ class StudentSupportAgentV4:
         )
 
         if not chunks:
-            return self.escalate("No syllabus content found")
+            return self.escalate("No reliable syllabus content found")
 
-        if len(chunks) < 2:
+        # Retrieval is already hardened in Block 9.12
+        # Now apply semantic confidence gating
+
+        if len(chunks) == 1:
+            self.logger.log("RAG_WEAK_SIGNAL", "Single chunk retrieval")
             return self.escalate("Insufficient retrieval confidence")
 
         try:
@@ -79,7 +86,6 @@ class StudentSupportAgentV4:
 
         content = "\n".join(chunks)
 
-        # ✅ Context Size Kill-Switch (Per-Request Cost Safety)
         approx_tokens = len(content.split()) * 1.3
 
         if approx_tokens > 1200:
@@ -88,7 +94,6 @@ class StudentSupportAgentV4:
             })
             return self.escalate("Context too large for safe processing")
 
-        # ✅ Atomic Budget Check (Race-Condition Safe)
         exceeded, reason = check_and_update(0)
         if exceeded:
             self.logger.log("BUDGET_BLOCKED", reason)
@@ -96,10 +101,6 @@ class StudentSupportAgentV4:
 
         self.logger.log("OPENAI_REQUEST", {
             "model": "gpt-4o-mini"
-        })
-
-        self.logger.log("OPENAI_GUARDRAIL", {
-            "max_tokens": 300
         })
 
         try:
@@ -136,7 +137,6 @@ class StudentSupportAgentV4:
                     "total_tokens": usage.total_tokens
                 })
 
-                # ✅ Atomic Counter Update (Critical)
                 check_and_update(usage.total_tokens)
 
         except Exception:
@@ -144,9 +144,15 @@ class StudentSupportAgentV4:
 
         try:
             answer = response.choices[0].message.content
+
             if not answer:
                 return self.escalate("Empty AI response")
+
+            if "Insufficient information" in answer:
+                return self.escalate("Knowledge base lacks required explanation")
+
             return answer
+
         except Exception as e:
             self.logger.log("OPENAI_RESPONSE_PARSE_FAILURE", str(e))
             return self.escalate("AI response failure")
