@@ -3,19 +3,19 @@ import re
 import chromadb
 from chromadb.config import Settings
 from services.logging_service import LoggingService
+from langchain_openai import OpenAIEmbeddings
 
 
-# ================= STATIC SAFETY CONSTANTS =================
-# These act as fallback defaults before calibration stabilizes
+# ================= CONSTANTS =================
 
-MAX_DISTANCE_CAP = 0.40
+MAX_DISTANCE_CAP = 0.85
 BEST_MATCH_MARGIN = 0.05
-COHERENCE_SPREAD_LIMIT = 0.12
-CONFIDENCE_DIVISOR = 0.40
-MIN_RETRIEVAL_SCORE = 0.60
+COHERENCE_SPREAD_LIMIT = 0.20
+CONFIDENCE_DIVISOR = 1.0
+MIN_RETRIEVAL_SCORE = 0.20
 
 
-# ================= PATH RESOLUTION =================
+# ================= PATH =================
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CHROMA_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "chroma_db"))
@@ -23,6 +23,16 @@ COLLECTION_NAME = "curionest"
 
 
 # ================= HELPERS =================
+
+def normalize_text(text):
+    return re.findall(r"\b\w+\b", text.lower())
+
+
+def lexical_overlap(query, chunk, min_hits=2):
+    query_terms = set(normalize_text(query))
+    chunk_terms = set(normalize_text(chunk))
+    return len(query_terms.intersection(chunk_terms)) >= min_hits
+
 
 def chunks_are_coherent(distances, spread_limit=COHERENCE_SPREAD_LIMIT):
     if len(distances) < 2:
@@ -35,16 +45,6 @@ def retrieval_score(distances, divisor=CONFIDENCE_DIVISOR):
         return 0.0
     avg = sum(distances) / len(distances)
     return max(0.0, 1 - (avg / divisor))
-
-
-def lexical_overlap(query, chunk, min_hits=2):
-    def normalize(text):
-        return re.findall(r"\b\w+\b", text.lower())
-
-    query_terms = set(normalize(query))
-    chunk_terms = set(normalize(chunk))
-
-    return len(query_terms.intersection(chunk_terms)) >= min_hits
 
 
 # ================= RAG STORE =================
@@ -61,34 +61,24 @@ class ChromaRAGStore:
         )
 
         self.logger = LoggingService()
-
-        # 9.14 Calibration state (in-memory, safe)
-        self.calibration_stats = {}
+        self.embedder = OpenAIEmbeddings()
 
         self.collection = self._ensure_cosine_collection()
 
-    # ================= COSINE SAFETY =================
+    # ---------------- COSINE SAFETY ----------------
 
     def _ensure_cosine_collection(self):
-
         try:
             collection = self.client.get_collection(name=COLLECTION_NAME)
             metadata = collection.metadata or {}
-            current_space = metadata.get("hnsw:space")
-
-            if current_space == "cosine":
+            if metadata.get("hnsw:space") == "cosine":
                 return collection
 
             count = collection.count()
 
-            self.logger.log("RAG_COLLECTION_MIGRATION_REQUIRED", {
-                "old_space": current_space,
-                "count": count
-            })
-
             if count > 0:
-                self.logger.log("RAG_MIGRATION_BLOCKED", {
-                    "reason": "non_empty_collection"
+                self.logger.log("RAG_WARNING_NON_COSINE_COLLECTION", {
+                    "count": count
                 })
                 return collection
 
@@ -96,48 +86,13 @@ class ChromaRAGStore:
 
         except ValueError:
             pass
-        except Exception as e:
-            self.logger.log("RAG_COLLECTION_ERROR", {"error": str(e)})
 
         return self.client.get_or_create_collection(
             name=COLLECTION_NAME,
             metadata={"hnsw:space": "cosine"}
         )
 
-    # ================= 9.14 CALIBRATION =================
-
-    def _update_calibration(self, subject, chapter, best_distance):
-        key = (subject, chapter)
-
-        stats = self.calibration_stats.get(key, {
-            "count": 0,
-            "mean": 0.0,
-            "m2": 0.0
-        })
-
-        stats["count"] += 1
-        delta = best_distance - stats["mean"]
-        stats["mean"] += delta / stats["count"]
-        delta2 = best_distance - stats["mean"]
-        stats["m2"] += delta * delta2
-
-        self.calibration_stats[key] = stats
-
-    def _adaptive_distance_cap(self, subject, chapter):
-        key = (subject, chapter)
-        stats = self.calibration_stats.get(key)
-
-        if not stats or stats["count"] < 5:
-            return MAX_DISTANCE_CAP
-
-        variance = stats["m2"] / max(stats["count"] - 1, 1)
-        std_dev = variance ** 0.5
-
-        adaptive = stats["mean"] + (1.5 * std_dev)
-
-        return min(adaptive, 0.85)
-
-    # ================= SEARCH =================
+    # ---------------- SEARCH ----------------
 
     def search(self, query, subject, chapter, k=3):
 
@@ -145,8 +100,10 @@ class ChromaRAGStore:
             return []
 
         try:
+            query_embedding = self.embedder.embed_query(query)
+
             res = self.collection.query(
-                query_texts=[query],
+                query_embeddings=[query_embedding],
                 n_results=k,
                 where={
                     "$and": [
@@ -156,6 +113,7 @@ class ChromaRAGStore:
                 },
                 include=["documents", "distances"]
             )
+
         except Exception as e:
             self.logger.log("RAG_QUERY_FAILURE", str(e))
             return []
@@ -170,13 +128,7 @@ class ChromaRAGStore:
         dists = distances[0]
 
         best_distance = min(dists)
-
-        # 9.14 calibration update
-        self._update_calibration(subject, chapter, best_distance)
-
-        adaptive_cap = self._adaptive_distance_cap(subject, chapter)
-
-        dynamic_threshold = min(best_distance + BEST_MATCH_MARGIN, adaptive_cap)
+        dynamic_threshold = min(best_distance + BEST_MATCH_MARGIN, MAX_DISTANCE_CAP)
 
         filtered_chunks = []
         filtered_distances = []
@@ -205,3 +157,5 @@ class ChromaRAGStore:
             return []
 
         return filtered_chunks
+    
+    
