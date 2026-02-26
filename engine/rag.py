@@ -1,25 +1,16 @@
+import os
 import chromadb
 from chromadb.config import Settings
 from services.logging_service import LoggingService
 
 
-MAX_DISTANCE_CAP = 0.40          # absolute safety ceiling
-BEST_MATCH_MARGIN = 0.05         # adaptive margin
-COHERENCE_SPREAD_LIMIT = 0.12    # chunk consistency guard
-CONFIDENCE_DIVISOR = 0.40        # scoring normalization
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CHROMA_DIR = os.path.join(BASE_DIR, "..", "chroma_db")
+CHROMA_DIR = os.path.abspath(CHROMA_DIR)
 
 
-def chunks_are_coherent(distances, spread_limit=COHERENCE_SPREAD_LIMIT):
-    if len(distances) < 2:
-        return True
-    return (max(distances) - min(distances)) < spread_limit
-
-
-def retrieval_score(distances, divisor=CONFIDENCE_DIVISOR):
-    if not distances:
-        return 0.0
-    avg = sum(distances) / len(distances)
-    return max(0.0, 1 - (avg / divisor))
+MAX_DISTANCE_CAP = 0.40
+BEST_MATCH_MARGIN = 0.05
 
 
 def lexical_overlap(query, chunk, min_hits=2):
@@ -29,11 +20,12 @@ def lexical_overlap(query, chunk, min_hits=2):
 
 
 class ChromaRAGStore:
-    def __init__(self, documents):
+
+    def __init__(self, documents=None):
 
         try:
             self.client = chromadb.Client(Settings(
-                persist_directory=".chroma",
+                persist_directory=CHROMA_DIR,
                 anonymized_telemetry=False
             ))
         except Exception:
@@ -42,45 +34,10 @@ class ChromaRAGStore:
         self.collection = self.client.get_or_create_collection("curionest")
         self.logger = LoggingService()
 
-        try:
-            self._ingest(documents)
-        except Exception:
-            pass  # Never block system startup
-
-    def _ingest(self, documents):
-
-        try:
-            existing_data = self.collection.get(include=[])
-            existing = set(existing_data.get("ids", []))
-        except Exception:
-            existing = set()
-
-        for doc in documents:
-
-            if doc.get("id") in existing:
-                continue
-
-            try:
-                self.collection.add(
-                    ids=[doc["id"]],
-                    documents=[doc["text"]],
-                    metadatas=[{
-                        "subject": doc.get("subject"),
-                        "chapter": doc.get("chapter")
-                    }]
-                )
-            except Exception:
-                continue
-
     def search(self, query, subject, chapter, k=3):
 
         if not query or not subject or not chapter:
             return []
-
-        self.logger.log("RAG_SEARCH", {
-            "subject": subject,
-            "chapter": chapter
-        })
 
         try:
             res = self.collection.query(
@@ -114,7 +71,6 @@ class ChromaRAGStore:
         dynamic_threshold = min(best_distance + BEST_MATCH_MARGIN, MAX_DISTANCE_CAP)
 
         filtered_chunks = []
-        filtered_distances = []
 
         for doc, dist in zip(docs, dists):
 
@@ -125,20 +81,5 @@ class ChromaRAGStore:
                 continue
 
             filtered_chunks.append(doc)
-            filtered_distances.append(dist)
-
-        score = retrieval_score(filtered_distances)
-        coherent = chunks_are_coherent(filtered_distances)
-
-        self.logger.log("RAG_DIAGNOSTICS", {
-            "best_distance": best_distance,
-            "dynamic_threshold": dynamic_threshold,
-            "filtered_count": len(filtered_chunks),
-            "retrieval_score": score,
-            "coherent": coherent
-        })
-
-        if not filtered_chunks:
-            return []
 
         return filtered_chunks
