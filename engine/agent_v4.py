@@ -4,10 +4,8 @@ from services.logging_service import LoggingService
 from budget_guard import check_and_update
 
 
-MIN_RETRIEVAL_SCORE = 0.60
-
-
 class StudentSupportAgentV4:
+
     def __init__(self, rag_store):
         self.rag_store = rag_store
         self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -54,9 +52,11 @@ class StudentSupportAgentV4:
         }
 
     def decide_action(self, identified):
+
         if identified["difficulty"] == "advanced":
             identified["escalation_reason"] = "Advanced question requires teacher"
             return "ESCALATE"
+
         return "RESPOND"
 
     def respond(self, question, identified):
@@ -67,14 +67,13 @@ class StudentSupportAgentV4:
             identified["chapter"]
         )
 
+        # ✅ Deterministic failure handling (no behavioural change)
         if not chunks:
+            self.logger.log("AGENT_ESCALATION", "No reliable retrieval")
             return self.escalate("No reliable syllabus content found")
 
-        # Retrieval is already hardened in Block 9.12
-        # Now apply semantic confidence gating
-
-        if len(chunks) == 1:
-            self.logger.log("RAG_WEAK_SIGNAL", "Single chunk retrieval")
+        if len(chunks) < 2:
+            self.logger.log("AGENT_ESCALATION", "Weak retrieval signal")
             return self.escalate("Insufficient retrieval confidence")
 
         try:
@@ -88,6 +87,7 @@ class StudentSupportAgentV4:
 
         approx_tokens = len(content.split()) * 1.3
 
+        # ✅ Context size guard (unchanged logic)
         if approx_tokens > 1200:
             self.logger.log("OPENAI_COST_BLOCKED", {
                 "approx_tokens": approx_tokens
@@ -95,6 +95,7 @@ class StudentSupportAgentV4:
             return self.escalate("Context too large for safe processing")
 
         exceeded, reason = check_and_update(0)
+
         if exceeded:
             self.logger.log("BUDGET_BLOCKED", reason)
             return self.escalate(reason)
@@ -124,12 +125,14 @@ class StudentSupportAgentV4:
                 ],
                 timeout=8
             )
+
         except Exception as e:
             self.logger.log("OPENAI_TIMEOUT_OR_FAILURE", str(e))
             return self.escalate("AI provider failure")
 
         try:
             usage = response.usage
+
             if usage:
                 self.logger.log("OPENAI_USAGE", {
                     "prompt_tokens": usage.prompt_tokens,
@@ -161,7 +164,9 @@ class StudentSupportAgentV4:
         return f"ESCALATE TO SME: {reason}"
 
     def detect_difficulty(self, question):
+
         for k in ["prove", "derive", "theorem"]:
             if k in question.lower():
                 return "advanced"
+
         return "basic"
