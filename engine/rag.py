@@ -122,6 +122,12 @@ class ChromaRAGStore:
         distances = res.get("distances")
 
         if not documents or not distances or not documents[0]:
+            self.logger.log("RAG_DECISION_TRACE", {
+                "subject": subject,
+                "chapter": chapter,
+                "query_preview": query[:80],
+                "decision": "REJECT_NO_VECTORS"
+            })
             return []
 
         docs = documents[0]
@@ -144,18 +150,32 @@ class ChromaRAGStore:
             filtered_chunks.append(doc)
             filtered_distances.append(dist)
 
-        if not filtered_chunks:
-            return []
-
         score = retrieval_score(filtered_distances)
         coherent = chunks_are_coherent(filtered_distances)
 
-        if score < MIN_RETRIEVAL_SCORE:
-            return []
+        decision = "ACCEPT"
 
-        if not coherent:
+        if not filtered_chunks:
+            decision = "REJECT_NO_CHUNKS"
+        elif score < MIN_RETRIEVAL_SCORE:
+            decision = "REJECT_LOW_SCORE"
+        elif not coherent:
+            decision = "REJECT_INCOHERENT"
+
+        self.logger.log("RAG_DECISION_TRACE", {
+            "subject": subject,
+            "chapter": chapter,
+            "query_preview": query[:80],
+            "best_distance": best_distance,
+            "threshold": dynamic_threshold,
+            "raw_distances": dists,
+            "accepted_chunks": len(filtered_chunks),
+            "score": score,
+            "coherent": coherent,
+            "decision": decision
+        })
+
+        if decision != "ACCEPT":
             return []
 
         return filtered_chunks
-    
-    
