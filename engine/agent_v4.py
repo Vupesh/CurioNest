@@ -6,37 +6,47 @@ from budget_guard import check_and_update
 
 class StudentSupportAgentV4:
 
-    def __init__(self, rag_store):
+    def __init__(self, rag_store, session_engine=None):
         self.rag_store = rag_store
         self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.logger = LoggingService()
+        self.session_engine = session_engine
 
     # ================= ENTRY POINT =================
 
-    def receive_question(self, question, context):
+    def receive_question(self, question, context, session_id="default"):
 
         try:
             identified = self.identify_context(question, context)
         except Exception:
-            return self.escalate("Context identification failure", "ESC_CONTEXT_ERROR")
+            return self.escalate("Context identification failure", "ESC_CONTEXT_ERROR", session_id)
 
         if not identified or not isinstance(identified, dict):
-            return self.escalate("Invalid context generated", "ESC_CONTEXT_INVALID")
+            return self.escalate("Invalid context generated", "ESC_CONTEXT_INVALID", session_id)
+
+        # ---- Session update on question ----
+        if self.session_engine:
+            self.session_engine.update_on_question(
+                session_id,
+                identified.get("chapter"),
+                identified.get("difficulty")
+            )
 
         try:
             decision = self.decide_action(identified)
         except Exception:
-            return self.escalate("Decision engine failure", "ESC_DECISION_FAILURE")
+            return self.escalate("Decision engine failure", "ESC_DECISION_FAILURE", session_id)
 
         if decision == "RESPOND":
             try:
-                return self.respond(question, identified)
+                return self.respond(question, identified, session_id)
             except Exception:
-                return self.escalate("Response generation failure", "ESC_RESPONSE_FAILURE")
+                return self.escalate("Response generation failure", "ESC_RESPONSE_FAILURE", session_id)
 
         return self.escalate(
             identified.get("escalation_reason", "Unknown reason"),
-            identified.get("escalation_code", "ESC_UNKNOWN")
+            identified.get("escalation_code", "ESC_UNKNOWN"),
+            session_id
         )
 
     # ================= CONTEXT =================
@@ -78,7 +88,7 @@ class StudentSupportAgentV4:
 
     # ================= RESPONSE =================
 
-    def respond(self, question, identified):
+    def respond(self, question, identified, session_id):
 
         chunks = self.rag_store.search(
             question,
@@ -86,7 +96,6 @@ class StudentSupportAgentV4:
             identified["chapter"]
         )
 
-        # --- No vectors or all rejected ---
         if not chunks:
             self.logger.log("ESCALATION_EVENT", {
                 "code": "ESC_NO_VECTORS",
@@ -96,10 +105,10 @@ class StudentSupportAgentV4:
 
             return self.escalate(
                 "No reliable syllabus content found",
-                "ESC_NO_VECTORS"
+                "ESC_NO_VECTORS",
+                session_id
             )
 
-        # --- Weak retrieval signal ---
         if len(chunks) < 2:
             self.logger.log("ESCALATION_EVENT", {
                 "code": "ESC_LOW_CONFIDENCE",
@@ -109,25 +118,26 @@ class StudentSupportAgentV4:
 
             return self.escalate(
                 "Insufficient retrieval confidence",
-                "ESC_LOW_CONFIDENCE"
+                "ESC_LOW_CONFIDENCE",
+                session_id
             )
 
         try:
-            return self.explain_with_ai(question, chunks)
+            return self.explain_with_ai(question, chunks, session_id)
         except Exception:
             return self.escalate(
                 "AI explanation failure",
-                "ESC_AI_FAILURE"
+                "ESC_AI_FAILURE",
+                session_id
             )
 
     # ================= AI EXPLANATION =================
 
-    def explain_with_ai(self, question, chunks):
+    def explain_with_ai(self, question, chunks, session_id):
 
         content = "\n".join(chunks)
         approx_tokens = len(content.split()) * 1.3
 
-        # --- Context size guard ---
         if approx_tokens > 1200:
             self.logger.log("ESCALATION_EVENT", {
                 "code": "ESC_CONTEXT_TOO_LARGE",
@@ -136,7 +146,8 @@ class StudentSupportAgentV4:
 
             return self.escalate(
                 "Context too large for safe processing",
-                "ESC_CONTEXT_TOO_LARGE"
+                "ESC_CONTEXT_TOO_LARGE",
+                session_id
             )
 
         exceeded, reason = check_and_update(0)
@@ -147,7 +158,7 @@ class StudentSupportAgentV4:
                 "reason": reason
             })
 
-            return self.escalate(reason, "ESC_BUDGET_BLOCK")
+            return self.escalate(reason, "ESC_BUDGET_BLOCK", session_id)
 
         self.logger.log("OPENAI_REQUEST", {
             "model": "gpt-4o-mini"
@@ -183,7 +194,8 @@ class StudentSupportAgentV4:
 
             return self.escalate(
                 "AI provider failure",
-                "ESC_AI_TIMEOUT"
+                "ESC_AI_TIMEOUT",
+                session_id
             )
 
         try:
@@ -207,7 +219,8 @@ class StudentSupportAgentV4:
             if not answer:
                 return self.escalate(
                     "Empty AI response",
-                    "ESC_EMPTY_RESPONSE"
+                    "ESC_EMPTY_RESPONSE",
+                    session_id
                 )
 
             if "Insufficient information" in answer:
@@ -217,7 +230,8 @@ class StudentSupportAgentV4:
 
                 return self.escalate(
                     "Knowledge base lacks required explanation",
-                    "ESC_KNOWLEDGE_GAP"
+                    "ESC_KNOWLEDGE_GAP",
+                    session_id
                 )
 
             return answer
@@ -230,16 +244,28 @@ class StudentSupportAgentV4:
 
             return self.escalate(
                 "AI response failure",
-                "ESC_AI_PARSE_FAILURE"
+                "ESC_AI_PARSE_FAILURE",
+                session_id
             )
 
     # ================= ESCALATION =================
 
-    def escalate(self, reason, code):
+    def escalate(self, reason, code, session_id):
+
+        if self.session_engine:
+            self.session_engine.update_on_escalation(session_id)
+            score = self.session_engine.calculate_engagement_score(session_id)
+
+            self.logger.log("ENGAGEMENT_UPDATE", {
+                "session_id": session_id,
+                "engagement_score": score
+            })
+
         self.logger.log("ESCALATION_TRIGGERED", {
             "code": code,
             "reason": reason
         })
+
         return f"ESCALATE TO SME: {reason}"
 
     # ================= DIFFICULTY =================
