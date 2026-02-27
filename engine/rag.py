@@ -71,6 +71,7 @@ class ChromaRAGStore:
         try:
             collection = self.client.get_collection(name=COLLECTION_NAME)
             metadata = collection.metadata or {}
+
             if metadata.get("hnsw:space") == "cosine":
                 return collection
 
@@ -179,3 +180,83 @@ class ChromaRAGStore:
             return []
 
         return filtered_chunks
+
+    # ---------------- PHASE 1 VALIDATION ----------------
+
+    def validate_chapter(self, subject: str, chapter: str) -> dict:
+
+        try:
+            res = self.collection.get(
+                where={
+                    "$and": [
+                        {"subject": subject},
+                        {"chapter": chapter}
+                    ]
+                },
+                include=["documents"]
+            )
+
+            docs = res.get("documents", [])
+
+            if not docs:
+                return {
+                    "valid": False,
+                    "reason": "No documents found",
+                    "count": 0
+                }
+
+            count = len(docs)
+
+            # Use multiple probes to avoid header bias
+            probe_candidates = docs[:3] if len(docs) >= 3 else docs
+
+            best_similarity = 0.0
+
+            for probe_text in probe_candidates:
+
+                probe_text = probe_text[:300]
+
+                query_embedding = self.embedder.embed_query(probe_text)
+
+                test_res = self.collection.query(
+                    query_embeddings=[query_embedding],
+                    n_results=1,
+                    where={
+                        "$and": [
+                            {"subject": subject},
+                            {"chapter": chapter}
+                        ]
+                    },
+                    include=["distances"]
+                )
+
+                distances = test_res.get("distances", [[]])[0]
+
+                if not distances:
+                    continue
+
+                similarity = 1 - distances[0]
+
+                if similarity > best_similarity:
+                    best_similarity = similarity
+
+            if best_similarity < 0.55:
+                return {
+                    "valid": False,
+                    "reason": f"Low semantic similarity ({best_similarity:.2f})",
+                    "count": count
+                }
+
+            return {
+                "valid": True,
+                "reason": "OK",
+                "count": count,
+                "similarity": round(best_similarity, 3)
+            }
+
+        except Exception as e:
+            return {
+                "valid": False,
+                "reason": f"Validation error: {str(e)}",
+                "count": 0
+            }
