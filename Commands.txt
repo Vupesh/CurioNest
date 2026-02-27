@@ -1,0 +1,41 @@
+venv\Scripts\activate
+cmd /k venv\Scripts\activate.bat
+
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+
+venv\Scripts\python.exe app.py
+
+Never trust python command on Windows.
+
+Always use:
+
+.\venv\Scripts\python.exe
+
+Verification:
+
+.\venv\Scripts\python.exe -V
+
+Must show Python 3.11.x
+Python
+from knowledge_ingest import ingest_document
+
+Invoke-RestMethod `
+>>   -Uri "http://127.0.0.1:5000/ask-question" `
+>>   -Method POST `
+>>   -ContentType "application/json" `
+>>   -Body '{"question":"Derive Newton second law using calculus","subject":"Physics","chapter":"Laws of Motion"}
+
+
+
+
+
+Invoke-WebRequest -Uri http://127.0.0.1:5000/ask-question `
+-Method POST `
+-ContentType "application/json" `
+-Body '{"question":"Explain Newton second law","subject":"Physics","chapter":"Laws of Motion"}'
+
+from engine.rag import ChromaRAGStore
+
+rag = ChromaRAGStore()
+
+rag.search("What is photosynthesis","Physics","Electricity")
