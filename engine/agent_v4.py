@@ -16,13 +16,22 @@ class StudentSupportAgentV4:
 
     def receive_question(self, question, context, session_id="default"):
 
+        # ---- Intent Classification (NEW) ----
+        intent, intent_strength = self.classify_intent(question)
+
+        self.logger.log("INTENT_ANALYSIS", {
+            "session_id": session_id,
+            "intent": intent,
+            "intent_strength": intent_strength
+        })
+
         try:
             identified = self.identify_context(question, context)
         except Exception:
-            return self.escalate("Context identification failure", "ESC_CONTEXT_ERROR", session_id)
+            return self.escalate("Context identification failure", "ESC_CONTEXT_ERROR", session_id, intent_strength)
 
         if not identified or not isinstance(identified, dict):
-            return self.escalate("Invalid context generated", "ESC_CONTEXT_INVALID", session_id)
+            return self.escalate("Invalid context generated", "ESC_CONTEXT_INVALID", session_id, intent_strength)
 
         # ---- Session update on question ----
         if self.session_engine:
@@ -35,29 +44,53 @@ class StudentSupportAgentV4:
         try:
             decision = self.decide_action(identified)
         except Exception:
-            return self.escalate("Decision engine failure", "ESC_DECISION_FAILURE", session_id)
+            return self.escalate("Decision engine failure", "ESC_DECISION_FAILURE", session_id, intent_strength)
 
         if decision == "RESPOND":
             try:
-                return self.respond(question, identified, session_id)
+                return self.respond(question, identified, session_id, intent_strength)
             except Exception:
-                return self.escalate("Response generation failure", "ESC_RESPONSE_FAILURE", session_id)
+                return self.escalate("Response generation failure", "ESC_RESPONSE_FAILURE", session_id, intent_strength)
 
         return self.escalate(
             identified.get("escalation_reason", "Unknown reason"),
             identified.get("escalation_code", "ESC_UNKNOWN"),
-            session_id
+            session_id,
+            intent_strength
         )
+
+    # ================= INTENT CLASSIFICATION (NEW) =================
+
+    def classify_intent(self, question):
+
+        q = question.lower()
+        intent = "KNOWLEDGE_QUERY"
+        strength = 0
+
+        if any(k in q for k in ["prove", "derive", "theorem"]):
+            intent = "ADVANCED_ACADEMIC"
+            strength += 2
+
+        if any(k in q for k in ["need help", "teacher", "tutor", "extra class"]):
+            intent = "DIRECT_HELP_REQUEST"
+            strength += 3
+
+        if any(k in q for k in ["urgent", "exam tomorrow", "asap"]):
+            intent = "HIGH_URGENCY"
+            strength += 3
+
+        if any(k in q for k in ["confused", "stuck", "not understanding"]):
+            intent = "FRUSTRATION_SIGNAL"
+            strength += 2
+
+        return intent, strength
 
     # ================= CONTEXT =================
 
     def identify_context(self, question, context):
 
-        try:
-            subject = context.get("subject")
-            chapter = context.get("chapter")
-        except Exception:
-            return None
+        subject = context.get("subject")
+        chapter = context.get("chapter")
 
         difficulty = self.detect_difficulty(question)
 
@@ -76,19 +109,13 @@ class StudentSupportAgentV4:
             identified["escalation_reason"] = "Advanced question requires teacher"
             identified["escalation_code"] = "ESC_ADVANCED_TOPIC"
 
-            self.logger.log("ESCALATION_EVENT", {
-                "code": "ESC_ADVANCED_TOPIC",
-                "subject": identified["subject"],
-                "chapter": identified["chapter"]
-            })
-
             return "ESCALATE"
 
         return "RESPOND"
 
     # ================= RESPONSE =================
 
-    def respond(self, question, identified, session_id):
+    def respond(self, question, identified, session_id, intent_strength):
 
         chunks = self.rag_store.search(
             question,
@@ -97,72 +124,42 @@ class StudentSupportAgentV4:
         )
 
         if not chunks:
-            self.logger.log("ESCALATION_EVENT", {
-                "code": "ESC_NO_VECTORS",
-                "subject": identified["subject"],
-                "chapter": identified["chapter"]
-            })
-
             return self.escalate(
                 "No reliable syllabus content found",
                 "ESC_NO_VECTORS",
-                session_id
+                session_id,
+                intent_strength
             )
 
         if len(chunks) < 2:
-            self.logger.log("ESCALATION_EVENT", {
-                "code": "ESC_LOW_CONFIDENCE",
-                "subject": identified["subject"],
-                "chapter": identified["chapter"]
-            })
-
             return self.escalate(
                 "Insufficient retrieval confidence",
                 "ESC_LOW_CONFIDENCE",
-                session_id
+                session_id,
+                intent_strength
             )
 
-        try:
-            return self.explain_with_ai(question, chunks, session_id)
-        except Exception:
-            return self.escalate(
-                "AI explanation failure",
-                "ESC_AI_FAILURE",
-                session_id
-            )
+        return self.explain_with_ai(question, chunks, session_id, intent_strength)
 
     # ================= AI EXPLANATION =================
 
-    def explain_with_ai(self, question, chunks, session_id):
+    def explain_with_ai(self, question, chunks, session_id, intent_strength):
 
         content = "\n".join(chunks)
         approx_tokens = len(content.split()) * 1.3
 
         if approx_tokens > 1200:
-            self.logger.log("ESCALATION_EVENT", {
-                "code": "ESC_CONTEXT_TOO_LARGE",
-                "approx_tokens": approx_tokens
-            })
-
             return self.escalate(
                 "Context too large for safe processing",
                 "ESC_CONTEXT_TOO_LARGE",
-                session_id
+                session_id,
+                intent_strength
             )
 
         exceeded, reason = check_and_update(0)
 
         if exceeded:
-            self.logger.log("ESCALATION_EVENT", {
-                "code": "ESC_BUDGET_BLOCK",
-                "reason": reason
-            })
-
-            return self.escalate(reason, "ESC_BUDGET_BLOCK", session_id)
-
-        self.logger.log("OPENAI_REQUEST", {
-            "model": "gpt-4o-mini"
-        })
+            return self.escalate(reason, "ESC_BUDGET_BLOCK", session_id, intent_strength)
 
         try:
             response = self.client.chat.completions.create(
@@ -185,88 +182,69 @@ class StudentSupportAgentV4:
                 ],
                 timeout=8
             )
-
-        except Exception as e:
-            self.logger.log("ESCALATION_EVENT", {
-                "code": "ESC_AI_TIMEOUT",
-                "error": str(e)
-            })
-
+        except Exception:
             return self.escalate(
                 "AI provider failure",
                 "ESC_AI_TIMEOUT",
-                session_id
+                session_id,
+                intent_strength
             )
 
-        try:
-            usage = response.usage
+        answer = response.choices[0].message.content
 
-            if usage:
-                self.logger.log("OPENAI_USAGE", {
-                    "prompt_tokens": usage.prompt_tokens,
-                    "completion_tokens": usage.completion_tokens,
-                    "total_tokens": usage.total_tokens
-                })
-
-                check_and_update(usage.total_tokens)
-
-        except Exception:
-            pass
-
-        try:
-            answer = response.choices[0].message.content
-
-            if not answer:
-                return self.escalate(
-                    "Empty AI response",
-                    "ESC_EMPTY_RESPONSE",
-                    session_id
-                )
-
-            if "Insufficient information" in answer:
-                self.logger.log("ESCALATION_EVENT", {
-                    "code": "ESC_KNOWLEDGE_GAP"
-                })
-
-                return self.escalate(
-                    "Knowledge base lacks required explanation",
-                    "ESC_KNOWLEDGE_GAP",
-                    session_id
-                )
-
-            return answer
-
-        except Exception as e:
-            self.logger.log("ESCALATION_EVENT", {
-                "code": "ESC_AI_PARSE_FAILURE",
-                "error": str(e)
-            })
-
+        if not answer:
             return self.escalate(
-                "AI response failure",
-                "ESC_AI_PARSE_FAILURE",
-                session_id
+                "Empty AI response",
+                "ESC_EMPTY_RESPONSE",
+                session_id,
+                intent_strength
             )
+
+        if "Insufficient information" in answer:
+            return self.escalate(
+                "Knowledge base lacks required explanation",
+                "ESC_KNOWLEDGE_GAP",
+                session_id,
+                intent_strength
+            )
+
+        return answer
 
     # ================= ESCALATION =================
 
-    def escalate(self, reason, code, session_id):
+    def escalate(self, reason, code, session_id, intent_strength=0):
+
+        engagement_score = 0
 
         if self.session_engine:
             self.session_engine.update_on_escalation(session_id)
-            score = self.session_engine.calculate_engagement_score(session_id)
+            engagement_score = self.session_engine.calculate_engagement_score(session_id)
 
-            self.logger.log("ENGAGEMENT_UPDATE", {
-                "session_id": session_id,
-                "engagement_score": score
-            })
+        escalation_confidence = self.compute_escalation_confidence(
+            engagement_score,
+            intent_strength
+        )
 
         self.logger.log("ESCALATION_TRIGGERED", {
+            "session_id": session_id,
             "code": code,
-            "reason": reason
+            "reason": reason,
+            "engagement_score": engagement_score,
+            "intent_strength": intent_strength,
+            "escalation_confidence": escalation_confidence
         })
 
         return f"ESCALATE TO SME: {reason}"
+
+    # ================= CONFIDENCE SCORING (NEW) =================
+
+    def compute_escalation_confidence(self, engagement_score, intent_strength):
+
+        score = 0
+        score += engagement_score * 2
+        score += intent_strength * 5
+
+        return min(score, 100)
 
     # ================= DIFFICULTY =================
 
