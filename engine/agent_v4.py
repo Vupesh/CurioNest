@@ -16,7 +16,7 @@ class StudentSupportAgentV4:
 
     def receive_question(self, question, context, session_id="default"):
 
-        # ---- Intent Classification (NEW) ----
+        # ---- Intent Classification ----
         intent, intent_strength = self.classify_intent(question)
 
         self.logger.log("INTENT_ANALYSIS", {
@@ -33,7 +33,7 @@ class StudentSupportAgentV4:
         if not identified or not isinstance(identified, dict):
             return self.escalate("Invalid context generated", "ESC_CONTEXT_INVALID", session_id, intent_strength)
 
-        # ---- Session update on question ----
+        # ---- Session update ----
         if self.session_engine:
             self.session_engine.update_on_question(
                 session_id,
@@ -59,7 +59,7 @@ class StudentSupportAgentV4:
             intent_strength
         )
 
-    # ================= INTENT CLASSIFICATION (NEW) =================
+    # ================= INTENT =================
 
     def classify_intent(self, question):
 
@@ -108,7 +108,6 @@ class StudentSupportAgentV4:
         if identified["difficulty"] == "advanced":
             identified["escalation_reason"] = "Advanced question requires teacher"
             identified["escalation_code"] = "ESC_ADVANCED_TOPIC"
-
             return "ESCALATE"
 
         return "RESPOND"
@@ -141,7 +140,7 @@ class StudentSupportAgentV4:
 
         return self.explain_with_ai(question, chunks, session_id, intent_strength)
 
-    # ================= AI EXPLANATION =================
+    # ================= AI =================
 
     def explain_with_ai(self, question, chunks, session_id, intent_strength):
 
@@ -222,7 +221,8 @@ class StudentSupportAgentV4:
 
         escalation_confidence = self.compute_escalation_confidence(
             engagement_score,
-            intent_strength
+            intent_strength,
+            code
         )
 
         self.logger.log("ESCALATION_TRIGGERED", {
@@ -236,15 +236,38 @@ class StudentSupportAgentV4:
 
         return f"ESCALATE TO SME: {reason}"
 
-    # ================= CONFIDENCE SCORING (NEW) =================
+    # ================= CONFIDENCE SCORING =================
 
-    def compute_escalation_confidence(self, engagement_score, intent_strength):
+    def compute_escalation_confidence(self, engagement_score, intent_strength, escalation_code=None):
 
         score = 0
+
+        # Base weights
         score += engagement_score * 2
         score += intent_strength * 5
 
-        return min(score, 100)
+        # High-signal escalation codes
+        high_signal_codes = {
+            "ESC_ADVANCED_TOPIC",
+            "ESC_KNOWLEDGE_GAP"
+        }
+
+        if escalation_code in high_signal_codes:
+            score += 10
+
+        # Noise suppression
+        low_signal_codes = {
+            "ESC_NO_VECTORS",
+            "ESC_LOW_CONFIDENCE",
+            "ESC_CONTEXT_TOO_LARGE",
+            "ESC_BUDGET_BLOCK",
+            "ESC_AI_TIMEOUT"
+        }
+
+        if escalation_code in low_signal_codes:
+            score -= 5
+
+        return max(0, min(score, 100))
 
     # ================= DIFFICULTY =================
 
