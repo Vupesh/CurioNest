@@ -6,17 +6,17 @@ from budget_guard import check_and_update
 
 class StudentSupportAgentV4:
 
-    def __init__(self, rag_store, session_engine=None):
+    def __init__(self, rag_store, session_engine=None, ux_engine=None):
         self.rag_store = rag_store
         self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.logger = LoggingService()
         self.session_engine = session_engine
+        self.ux_engine = ux_engine
 
     # ================= ENTRY POINT =================
 
     def receive_question(self, question, context, session_id="default"):
 
-        # ---- Intent Classification ----
         intent, intent_strength = self.classify_intent(question)
 
         self.logger.log("INTENT_ANALYSIS", {
@@ -28,12 +28,21 @@ class StudentSupportAgentV4:
         try:
             identified = self.identify_context(question, context)
         except Exception:
-            return self.escalate("Context identification failure", "ESC_CONTEXT_ERROR", session_id, intent_strength)
+            return self.escalate(
+                "Context identification failure",
+                "ESC_CONTEXT_ERROR",
+                session_id,
+                intent_strength
+            )
 
         if not identified or not isinstance(identified, dict):
-            return self.escalate("Invalid context generated", "ESC_CONTEXT_INVALID", session_id, intent_strength)
+            return self.escalate(
+                "Invalid context generated",
+                "ESC_CONTEXT_INVALID",
+                session_id,
+                intent_strength
+            )
 
-        # ---- Session update ----
         if self.session_engine:
             self.session_engine.update_on_question(
                 session_id,
@@ -44,13 +53,23 @@ class StudentSupportAgentV4:
         try:
             decision = self.decide_action(identified)
         except Exception:
-            return self.escalate("Decision engine failure", "ESC_DECISION_FAILURE", session_id, intent_strength)
+            return self.escalate(
+                "Decision engine failure",
+                "ESC_DECISION_FAILURE",
+                session_id,
+                intent_strength
+            )
 
         if decision == "RESPOND":
             try:
                 return self.respond(question, identified, session_id, intent_strength)
             except Exception:
-                return self.escalate("Response generation failure", "ESC_RESPONSE_FAILURE", session_id, intent_strength)
+                return self.escalate(
+                    "Response generation failure",
+                    "ESC_RESPONSE_FAILURE",
+                    session_id,
+                    intent_strength
+                )
 
         return self.escalate(
             identified.get("escalation_reason", "Unknown reason"),
@@ -91,7 +110,6 @@ class StudentSupportAgentV4:
 
         subject = context.get("subject")
         chapter = context.get("chapter")
-
         difficulty = self.detect_difficulty(question)
 
         return {
@@ -122,20 +140,36 @@ class StudentSupportAgentV4:
             identified["chapter"]
         )
 
+        # -----------------------
+        # Retrieval Miss Handling
+        # -----------------------
+
         if not chunks:
-            return self.escalate(
-                "No reliable syllabus content found",
-                "ESC_NO_VECTORS",
-                session_id,
-                intent_strength
+            if intent_strength >= 2:
+                return self.escalate(
+                    "No reliable syllabus content found",
+                    "ESC_NO_VECTORS",
+                    session_id,
+                    intent_strength
+                )
+
+            return (
+                "I could not find exact syllabus content for this. "
+                "Could you rephrase or specify the exact concept?"
             )
 
         if len(chunks) < 2:
-            return self.escalate(
-                "Insufficient retrieval confidence",
-                "ESC_LOW_CONFIDENCE",
-                session_id,
-                intent_strength
+            if intent_strength >= 2:
+                return self.escalate(
+                    "Insufficient retrieval confidence",
+                    "ESC_LOW_CONFIDENCE",
+                    session_id,
+                    intent_strength
+                )
+
+            return (
+                "I found limited syllabus information. "
+                "Could you clarify your question slightly?"
             )
 
         return self.explain_with_ai(question, chunks, session_id, intent_strength)
@@ -234,19 +268,29 @@ class StudentSupportAgentV4:
             "escalation_confidence": escalation_confidence
         })
 
+        if self.ux_engine:
+            eligible = self.ux_engine.evaluate(
+                session_id,
+                escalation_confidence,
+                engagement_score
+            )
+
+            if eligible:
+                return (
+                    f"ESCALATE TO SME: {reason}\n\n"
+                    f"{self.ux_engine.get_prompt_message()}"
+                )
+
         return f"ESCALATE TO SME: {reason}"
 
-    # ================= CONFIDENCE SCORING =================
+    # ================= CONFIDENCE =================
 
     def compute_escalation_confidence(self, engagement_score, intent_strength, escalation_code=None):
 
         score = 0
-
-        # Base weights
         score += engagement_score * 2
         score += intent_strength * 5
 
-        # High-signal escalation codes
         high_signal_codes = {
             "ESC_ADVANCED_TOPIC",
             "ESC_KNOWLEDGE_GAP"
@@ -255,7 +299,6 @@ class StudentSupportAgentV4:
         if escalation_code in high_signal_codes:
             score += 10
 
-        # Noise suppression
         low_signal_codes = {
             "ESC_NO_VECTORS",
             "ESC_LOW_CONFIDENCE",
