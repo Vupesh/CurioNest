@@ -1,3 +1,5 @@
+from dotenv import load_dotenv
+load_dotenv()
 from engine.rag import ChromaRAGStore
 from engine.agent_v4 import StudentSupportAgentV4
 from services.session_engine import SessionEngine   # ← FIXED

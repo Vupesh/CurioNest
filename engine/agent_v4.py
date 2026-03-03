@@ -267,8 +267,9 @@ class StudentSupportAgentV4:
             "escalation_confidence": escalation_confidence
         })
 
-        # -------- Lead Qualification Layer --------
+        # -------- Lead Qualification + Deduplication --------
         if self.lead_engine:
+
             lead = self.lead_engine.evaluate_lead(
                 session_id=session_id,
                 subject=None,
@@ -280,7 +281,8 @@ class StudentSupportAgentV4:
                 intent_strength=intent_strength
             )
 
-            if lead:
+            if lead and self.lead_engine.should_send_notification(session_id):
+
                 subject_line = f"CurioNest Qualified Lead - {code}"
                 body = f"""
 Session ID: {session_id}
@@ -290,7 +292,14 @@ Confidence: {escalation_confidence}
 Engagement Score: {engagement_score}
 Intent Strength: {intent_strength}
 """
+
                 self.email_service.send_escalation(subject_line, body)
+
+                # Move status forward to prevent duplicate emails
+                self.lead_engine.update_status(
+                    session_id,
+                    self.lead_engine.STATUS_CONTACT_REQUESTED
+                )
 
         # -------- UX Layer --------
         if self.ux_engine:
