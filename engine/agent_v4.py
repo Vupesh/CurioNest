@@ -1,17 +1,20 @@
 import os
 from openai import OpenAI
 from services.logging_service import LoggingService
+from services.email_service import EmailService
 from budget_guard import check_and_update
 
 
 class StudentSupportAgentV4:
 
-    def __init__(self, rag_store, session_engine=None, ux_engine=None):
+    def __init__(self, rag_store, session_engine=None, ux_engine=None, lead_engine=None):
         self.rag_store = rag_store
         self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.logger = LoggingService()
         self.session_engine = session_engine
         self.ux_engine = ux_engine
+        self.lead_engine = lead_engine
+        self.email_service = EmailService()
 
     # ================= ENTRY POINT =================
 
@@ -140,10 +143,6 @@ class StudentSupportAgentV4:
             identified["chapter"]
         )
 
-        # -----------------------
-        # Retrieval Miss Handling
-        # -----------------------
-
         if not chunks:
             if intent_strength >= 2:
                 return self.escalate(
@@ -268,6 +267,32 @@ class StudentSupportAgentV4:
             "escalation_confidence": escalation_confidence
         })
 
+        # -------- Lead Qualification Layer --------
+        if self.lead_engine:
+            lead = self.lead_engine.evaluate_lead(
+                session_id=session_id,
+                subject=None,
+                chapter=None,
+                escalation_code=code,
+                escalation_reason=reason,
+                escalation_confidence=escalation_confidence,
+                engagement_score=engagement_score,
+                intent_strength=intent_strength
+            )
+
+            if lead:
+                subject_line = f"CurioNest Qualified Lead - {code}"
+                body = f"""
+Session ID: {session_id}
+Reason: {reason}
+Escalation Code: {code}
+Confidence: {escalation_confidence}
+Engagement Score: {engagement_score}
+Intent Strength: {intent_strength}
+"""
+                self.email_service.send_escalation(subject_line, body)
+
+        # -------- UX Layer --------
         if self.ux_engine:
             eligible = self.ux_engine.evaluate(
                 session_id,

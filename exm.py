@@ -2,6 +2,9 @@ from engine.rag import ChromaRAGStore
 from engine.agent_v4 import StudentSupportAgentV4
 from services.session_engine import SessionEngine   # ← FIXED
 from engine.ux_lead_engine import UXLeadEngine
+from engine.lead_engine import LeadEngine
+
+lead_engine = LeadEngine()
 
 
 def run_session(agent, session_id, context, questions):
@@ -22,10 +25,11 @@ if __name__ == "__main__":
     ux_engine = UXLeadEngine()
 
     agent = StudentSupportAgentV4(
-        rag,
-        session_engine=session_engine,
-        ux_engine=ux_engine
-    )
+    rag,
+    session_engine=session_engine,
+    ux_engine=ux_engine,
+    lead_engine=lead_engine
+)
 
     context = {
         "subject": "physics",
@@ -48,3 +52,5 @@ if __name__ == "__main__":
     ]
 
     run_session(agent, "prod2", context, questions_session_2)
+    print("\nGenerated Leads:")
+    print(lead_engine.leads)
