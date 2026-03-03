@@ -2,6 +2,7 @@ import os
 from openai import OpenAI
 from services.logging_service import LoggingService
 from services.email_service import EmailService
+from engine.lead_persistence import LeadPersistenceService
 from budget_guard import check_and_update
 
 
@@ -15,6 +16,9 @@ class StudentSupportAgentV4:
         self.ux_engine = ux_engine
         self.lead_engine = lead_engine
         self.email_service = EmailService()
+
+        # NEW: PostgreSQL persistence layer
+        self.lead_persistence = LeadPersistenceService()
 
     # ================= ENTRY POINT =================
 
@@ -267,7 +271,23 @@ class StudentSupportAgentV4:
             "escalation_confidence": escalation_confidence
         })
 
-        # -------- Lead Qualification + Deduplication --------
+        # ===== NEW: Persist Lead in PostgreSQL =====
+
+        self.lead_persistence.upsert_lead(
+            session_id=session_id,
+            subject=None,
+            chapter=None,
+            question=None,
+            escalation_code=code,
+            escalation_reason=reason,
+            confidence=escalation_confidence,
+            engagement_score=engagement_score,
+            intent_strength=intent_strength,
+            status="QUALIFIED" if escalation_confidence >= 40 else "NEW"
+        )
+
+        # ===== Existing Lead Engine + Email Logic =====
+
         if self.lead_engine:
 
             lead = self.lead_engine.evaluate_lead(
@@ -295,13 +315,13 @@ Intent Strength: {intent_strength}
 
                 self.email_service.send_escalation(subject_line, body)
 
-                # Move status forward to prevent duplicate emails
                 self.lead_engine.update_status(
                     session_id,
                     self.lead_engine.STATUS_CONTACT_REQUESTED
                 )
 
-        # -------- UX Layer --------
+        # ===== UX Layer =====
+
         if self.ux_engine:
             eligible = self.ux_engine.evaluate(
                 session_id,
