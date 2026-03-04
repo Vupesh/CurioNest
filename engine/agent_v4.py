@@ -17,7 +17,7 @@ class StudentSupportAgentV4:
         self.lead_engine = lead_engine
         self.email_service = EmailService()
 
-        # NEW: PostgreSQL persistence layer
+        # PostgreSQL Lead Persistence
         self.lead_persistence = LeadPersistenceService()
 
     # ================= ENTRY POINT =================
@@ -36,6 +36,9 @@ class StudentSupportAgentV4:
             identified = self.identify_context(question, context)
         except Exception:
             return self.escalate(
+                question,
+                None,
+                None,
                 "Context identification failure",
                 "ESC_CONTEXT_ERROR",
                 session_id,
@@ -44,6 +47,9 @@ class StudentSupportAgentV4:
 
         if not identified or not isinstance(identified, dict):
             return self.escalate(
+                question,
+                None,
+                None,
                 "Invalid context generated",
                 "ESC_CONTEXT_INVALID",
                 session_id,
@@ -61,6 +67,9 @@ class StudentSupportAgentV4:
             decision = self.decide_action(identified)
         except Exception:
             return self.escalate(
+                question,
+                identified.get("subject"),
+                identified.get("chapter"),
                 "Decision engine failure",
                 "ESC_DECISION_FAILURE",
                 session_id,
@@ -72,6 +81,9 @@ class StudentSupportAgentV4:
                 return self.respond(question, identified, session_id, intent_strength)
             except Exception:
                 return self.escalate(
+                    question,
+                    identified.get("subject"),
+                    identified.get("chapter"),
                     "Response generation failure",
                     "ESC_RESPONSE_FAILURE",
                     session_id,
@@ -79,6 +91,9 @@ class StudentSupportAgentV4:
                 )
 
         return self.escalate(
+            question,
+            identified.get("subject"),
+            identified.get("chapter"),
             identified.get("escalation_reason", "Unknown reason"),
             identified.get("escalation_code", "ESC_UNKNOWN"),
             session_id,
@@ -150,30 +165,30 @@ class StudentSupportAgentV4:
         if not chunks:
             if intent_strength >= 2:
                 return self.escalate(
+                    question,
+                    identified["subject"],
+                    identified["chapter"],
                     "No reliable syllabus content found",
                     "ESC_NO_VECTORS",
                     session_id,
                     intent_strength
                 )
 
-            return (
-                "I could not find exact syllabus content for this. "
-                "Could you rephrase or specify the exact concept?"
-            )
+            return "I could not find exact syllabus content. Could you clarify?"
 
         if len(chunks) < 2:
             if intent_strength >= 2:
                 return self.escalate(
+                    question,
+                    identified["subject"],
+                    identified["chapter"],
                     "Insufficient retrieval confidence",
                     "ESC_LOW_CONFIDENCE",
                     session_id,
                     intent_strength
                 )
 
-            return (
-                "I found limited syllabus information. "
-                "Could you clarify your question slightly?"
-            )
+            return "I found limited syllabus information. Could you clarify?"
 
         return self.explain_with_ai(question, chunks, session_id, intent_strength)
 
@@ -182,73 +197,54 @@ class StudentSupportAgentV4:
     def explain_with_ai(self, question, chunks, session_id, intent_strength):
 
         content = "\n".join(chunks)
-        approx_tokens = len(content.split()) * 1.3
-
-        if approx_tokens > 1200:
-            return self.escalate(
-                "Context too large for safe processing",
-                "ESC_CONTEXT_TOO_LARGE",
-                session_id,
-                intent_strength
-            )
 
         exceeded, reason = check_and_update(0)
 
         if exceeded:
-            return self.escalate(reason, "ESC_BUDGET_BLOCK", session_id, intent_strength)
+            return self.escalate(
+                question,
+                None,
+                None,
+                reason,
+                "ESC_BUDGET_BLOCK",
+                session_id,
+                intent_strength
+            )
 
         try:
+
             response = self.client.chat.completions.create(
                 model="gpt-4o-mini",
                 max_tokens=300,
                 messages=[
                     {
                         "role": "system",
-                        "content": (
-                            "You are a strictly retrieval-bound academic assistant. "
-                            "Answer ONLY using the provided content. "
-                            "If the content is insufficient, say exactly: "
-                            "'Insufficient information in provided syllabus content.'"
-                        )
+                        "content": "Answer strictly from syllabus content."
                     },
                     {
                         "role": "user",
-                        "content": f"Content:\n{content}\n\nQuestion:\n{question}"
+                        "content": f"{content}\n\nQuestion:{question}"
                     }
                 ],
                 timeout=8
             )
+
         except Exception:
             return self.escalate(
+                question,
+                None,
+                None,
                 "AI provider failure",
                 "ESC_AI_TIMEOUT",
                 session_id,
                 intent_strength
             )
 
-        answer = response.choices[0].message.content
-
-        if not answer:
-            return self.escalate(
-                "Empty AI response",
-                "ESC_EMPTY_RESPONSE",
-                session_id,
-                intent_strength
-            )
-
-        if "Insufficient information" in answer:
-            return self.escalate(
-                "Knowledge base lacks required explanation",
-                "ESC_KNOWLEDGE_GAP",
-                session_id,
-                intent_strength
-            )
-
-        return answer
+        return response.choices[0].message.content
 
     # ================= ESCALATION =================
 
-    def escalate(self, reason, code, session_id, intent_strength=0):
+    def escalate(self, question, subject, chapter, reason, code, session_id, intent_strength=0):
 
         engagement_score = 0
 
@@ -271,13 +267,12 @@ class StudentSupportAgentV4:
             "escalation_confidence": escalation_confidence
         })
 
-        # ===== NEW: Persist Lead in PostgreSQL =====
-
-        self.lead_persistence.upsert_lead(
+        # Persist Lead
+        lead_id = self.lead_persistence.upsert_lead(
             session_id=session_id,
-            subject=None,
-            chapter=None,
-            question=None,
+            subject=subject,
+            chapter=chapter,
+            question=question,
             escalation_code=code,
             escalation_reason=reason,
             confidence=escalation_confidence,
@@ -286,43 +281,29 @@ class StudentSupportAgentV4:
             status="QUALIFIED" if escalation_confidence >= 40 else "NEW"
         )
 
-        # ===== Existing Lead Engine + Email Logic =====
+        # Email notification
+        if escalation_confidence >= 40:
 
-        if self.lead_engine:
+            subject_line = f"CurioNest Qualified Lead - {code}"
 
-            lead = self.lead_engine.evaluate_lead(
-                session_id=session_id,
-                subject=None,
-                chapter=None,
-                escalation_code=code,
-                escalation_reason=reason,
-                escalation_confidence=escalation_confidence,
-                engagement_score=engagement_score,
-                intent_strength=intent_strength
-            )
+            body = f"""
+Lead ID: {lead_id}
+Session: {session_id}
+Subject: {subject}
+Chapter: {chapter}
 
-            if lead and self.lead_engine.should_send_notification(session_id):
-
-                subject_line = f"CurioNest Qualified Lead - {code}"
-                body = f"""
-Session ID: {session_id}
 Reason: {reason}
-Escalation Code: {code}
+
 Confidence: {escalation_confidence}
 Engagement Score: {engagement_score}
 Intent Strength: {intent_strength}
 """
 
-                self.email_service.send_escalation(subject_line, body)
+            self.email_service.send_escalation(subject_line, body)
 
-                self.lead_engine.update_status(
-                    session_id,
-                    self.lead_engine.STATUS_CONTACT_REQUESTED
-                )
-
-        # ===== UX Layer =====
-
+        # UX layer
         if self.ux_engine:
+
             eligible = self.ux_engine.evaluate(
                 session_id,
                 escalation_confidence,
@@ -330,6 +311,7 @@ Intent Strength: {intent_strength}
             )
 
             if eligible:
+
                 return (
                     f"ESCALATE TO SME: {reason}\n\n"
                     f"{self.ux_engine.get_prompt_message()}"
@@ -341,28 +323,10 @@ Intent Strength: {intent_strength}
 
     def compute_escalation_confidence(self, engagement_score, intent_strength, escalation_code=None):
 
-        score = 0
-        score += engagement_score * 2
-        score += intent_strength * 5
+        score = engagement_score * 2 + intent_strength * 5
 
-        high_signal_codes = {
-            "ESC_ADVANCED_TOPIC",
-            "ESC_KNOWLEDGE_GAP"
-        }
-
-        if escalation_code in high_signal_codes:
+        if escalation_code in {"ESC_ADVANCED_TOPIC", "ESC_KNOWLEDGE_GAP"}:
             score += 10
-
-        low_signal_codes = {
-            "ESC_NO_VECTORS",
-            "ESC_LOW_CONFIDENCE",
-            "ESC_CONTEXT_TOO_LARGE",
-            "ESC_BUDGET_BLOCK",
-            "ESC_AI_TIMEOUT"
-        }
-
-        if escalation_code in low_signal_codes:
-            score -= 5
 
         return max(0, min(score, 100))
 
@@ -370,8 +334,7 @@ Intent Strength: {intent_strength}
 
     def detect_difficulty(self, question):
 
-        for k in ["prove", "derive", "theorem"]:
-            if k in question.lower():
-                return "advanced"
+        if any(k in question.lower() for k in ["prove", "derive", "theorem"]):
+            return "advanced"
 
         return "basic"

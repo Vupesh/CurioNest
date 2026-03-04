@@ -1,14 +1,11 @@
 import os
 import psycopg2
 from psycopg2.extras import RealDictCursor
-from contextlib import contextmanager
-from services.logging_service import LoggingService
 
 
 class LeadPersistenceService:
 
     def __init__(self):
-        self.logger = LoggingService()
 
         self.db_config = {
             "host": os.getenv("DB_HOST"),
@@ -18,18 +15,154 @@ class LeadPersistenceService:
             "password": os.getenv("DB_PASSWORD"),
         }
 
-    @contextmanager
+    # --------------------------------
+    # DB Connection
+    # --------------------------------
+
     def get_connection(self):
-        conn = None
+        return psycopg2.connect(**self.db_config)
+
+    # --------------------------------
+    # Get existing lead by session
+    # --------------------------------
+
+    def get_lead_by_session(self, session_id):
+
+        conn = self.get_connection()
+
         try:
-            conn = psycopg2.connect(**self.db_config)
-            yield conn
-        except Exception as e:
-            self.logger.log("DB_CONNECTION_ERROR", {"error": str(e)})
-            raise
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM leads
+                    WHERE session_id = %s
+                    LIMIT 1
+                    """,
+                    (session_id,)
+                )
+
+                return cur.fetchone()
+
         finally:
-            if conn:
-                conn.close()
+            conn.close()
+
+    # --------------------------------
+    # Create new lead
+    # --------------------------------
+
+    def create_lead(
+        self,
+        session_id,
+        subject,
+        chapter,
+        question,
+        escalation_code,
+        escalation_reason,
+        confidence,
+        engagement_score,
+        intent_strength,
+        status
+    ):
+
+        conn = self.get_connection()
+
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+
+                cur.execute(
+                    """
+                    INSERT INTO leads (
+                        session_id,
+                        subject,
+                        chapter,
+                        question,
+                        escalation_code,
+                        escalation_reason,
+                        confidence,
+                        engagement_score,
+                        intent_strength,
+                        status
+                    )
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    RETURNING id
+                    """,
+                    (
+                        session_id,
+                        subject,
+                        chapter,
+                        question,
+                        escalation_code,
+                        escalation_reason,
+                        confidence,
+                        engagement_score,
+                        intent_strength,
+                        status
+                    )
+                )
+
+                lead_id = cur.fetchone()["id"]
+
+                conn.commit()
+
+                return lead_id
+
+        finally:
+            conn.close()
+
+    # --------------------------------
+    # Update existing lead
+    # --------------------------------
+
+    def update_lead(
+        self,
+        lead_id,
+        escalation_code,
+        escalation_reason,
+        confidence,
+        engagement_score,
+        intent_strength,
+        status
+    ):
+
+        conn = self.get_connection()
+
+        try:
+            with conn.cursor() as cur:
+
+                cur.execute(
+                    """
+                    UPDATE leads
+                    SET
+                        escalation_code = %s,
+                        escalation_reason = %s,
+                        confidence = GREATEST(confidence, %s),
+                        engagement_score = %s,
+                        intent_strength = %s,
+                        status = %s,
+                        updated_at = NOW()
+                    WHERE id = %s
+                    """,
+                    (
+                        escalation_code,
+                        escalation_reason,
+                        confidence,
+                        engagement_score,
+                        intent_strength,
+                        status,
+                        lead_id
+                    )
+                )
+
+                conn.commit()
+
+        finally:
+            conn.close()
+
+    # --------------------------------
+    # UPSERT Logic (Option A)
+    # --------------------------------
 
     def upsert_lead(
         self,
@@ -42,58 +175,38 @@ class LeadPersistenceService:
         confidence,
         engagement_score,
         intent_strength,
-        status="NEW"
+        status
     ):
 
-        query = """
-        INSERT INTO leads (
-            session_id,
-            subject,
-            chapter,
-            question,
-            escalation_code,
-            escalation_reason,
-            confidence,
-            engagement_score,
-            intent_strength,
-            status
-        )
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-        RETURNING id;
-        """
+        existing = self.get_lead_by_session(session_id)
 
-        try:
-            with self.get_connection() as conn:
-                with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                    cur.execute(
-                        query,
-                        (
-                            session_id,
-                            subject,
-                            chapter,
-                            question,
-                            escalation_code,
-                            escalation_reason,
-                            confidence,
-                            engagement_score,
-                            intent_strength,
-                            status,
-                        ),
-                    )
-                    lead_id = cur.fetchone()["id"]
-                    conn.commit()
+        if existing:
 
-                    self.logger.log(
-                        "LEAD_PERSISTED",
-                        {
-                            "lead_id": str(lead_id),
-                            "session_id": session_id,
-                            "status": status,
-                        },
-                    )
+            lead_id = existing["id"]
 
-                    return lead_id
+            self.update_lead(
+                lead_id,
+                escalation_code,
+                escalation_reason,
+                confidence,
+                engagement_score,
+                intent_strength,
+                status
+            )
 
-        except Exception as e:
-            self.logger.log("LEAD_PERSISTENCE_ERROR", {"error": str(e)})
-            return None
+            return lead_id
+
+        else:
+
+            return self.create_lead(
+                session_id,
+                subject,
+                chapter,
+                question,
+                escalation_code,
+                escalation_reason,
+                confidence,
+                engagement_score,
+                intent_strength,
+                status
+            )
