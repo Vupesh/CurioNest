@@ -7,6 +7,12 @@ venv\Scripts\python.exe app.py
 
 Never trust python command on Windows.
 
+
+
+DB Commands :
+psql -U postgres
+\c curionest_db
+
 Always use:
 
 .\venv\Scripts\python.exe
