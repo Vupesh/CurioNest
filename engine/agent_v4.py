@@ -3,6 +3,7 @@ from openai import OpenAI
 from services.logging_service import LoggingService
 from services.email_service import EmailService
 from engine.lead_persistence import LeadPersistenceService
+from engine.economics_engine import EscalationEconomicsEngine
 from budget_guard import check_and_update
 
 
@@ -19,6 +20,9 @@ class StudentSupportAgentV4:
 
         # PostgreSQL Lead Persistence
         self.lead_persistence = LeadPersistenceService()
+
+        # Escalation Economics Engine (Block 13)
+        self.economics_engine = EscalationEconomicsEngine()
 
     # ================= ENTRY POINT =================
 
@@ -258,16 +262,40 @@ class StudentSupportAgentV4:
             code
         )
 
+        # -------- Block 13: Lead Economics --------
+
+        lead_score = self.economics_engine.compute_lead_quality_score(
+            escalation_confidence,
+            engagement_score,
+            intent_strength
+        )
+
+        priority = self.economics_engine.determine_priority(lead_score)
+
+        if not self.economics_engine.escalation_budget_available():
+
+            self.logger.log("ESCALATION_BLOCKED_BUDGET", {
+                "session_id": session_id,
+                "lead_score": lead_score
+            })
+
+            return "Escalation capacity is currently limited. Please try again shortly."
+
+        self.economics_engine.register_escalation()
+
         self.logger.log("ESCALATION_TRIGGERED", {
             "session_id": session_id,
             "code": code,
             "reason": reason,
             "engagement_score": engagement_score,
             "intent_strength": intent_strength,
-            "escalation_confidence": escalation_confidence
+            "escalation_confidence": escalation_confidence,
+            "lead_quality_score": lead_score,
+            "priority": priority
         })
 
         # Persist Lead
+
         lead_id = self.lead_persistence.upsert_lead(
             session_id=session_id,
             subject=subject,
@@ -282,6 +310,7 @@ class StudentSupportAgentV4:
         )
 
         # Email notification
+
         if escalation_confidence >= 40:
 
             subject_line = f"CurioNest Qualified Lead - {code}"
@@ -297,11 +326,14 @@ Reason: {reason}
 Confidence: {escalation_confidence}
 Engagement Score: {engagement_score}
 Intent Strength: {intent_strength}
+Lead Quality Score: {lead_score}
+Priority: {priority}
 """
 
             self.email_service.send_escalation(subject_line, body)
 
         # UX layer
+
         if self.ux_engine:
 
             eligible = self.ux_engine.evaluate(
