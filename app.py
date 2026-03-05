@@ -1,6 +1,7 @@
 import os
 import time
 import uuid
+from typing import Dict, Any, Optional
 
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
@@ -23,15 +24,15 @@ from services.logging_service import LoggingService
 
 load_dotenv()
 
-app = Flask(__name__)
+app: Flask = Flask(__name__)
 
 CORS(
     app,
-    resources={r"/*": {"origins": "*"}},
+    resources={r"/*": {"origins": "*"}},  # TODO: Tighten origins for production (e.g., specific domains)
     supports_credentials=True
 )
 
-limiter = Limiter(
+limiter: Limiter = Limiter(
     get_remote_address,
     app=app,
     default_limits=["10 per minute"]
@@ -42,24 +43,41 @@ limiter = Limiter(
 # CORE ENGINE INITIALIZATION
 # ======================================
 
-logger = LoggingService()
+logger: LoggingService = LoggingService()
 
-rag_store = ChromaRAGStore()
+rag_store: ChromaRAGStore = ChromaRAGStore()
 
-agent = StudentSupportAgentV4(rag_store)
+agent: StudentSupportAgentV4 = StudentSupportAgentV4(rag_store)
 
-identity_engine = IdentityEngine()
+identity_engine: IdentityEngine = IdentityEngine()
 
-domain_engine = DomainEngine()
+domain_engine: DomainEngine = DomainEngine()
 
 
 # ======================================
-# MEMORY GUARDS (ANTI-ABUSE)
+# MEMORY GUARDS
 # ======================================
 
-app.session_memory = {}
-app.request_memory = {}
-app.question_memory = {}
+app.session_memory = {}  # type: Dict[str, float]
+app.request_memory = {}  # type: Dict[str, float]
+app.question_memory = {}  # type: Dict[str, str]
+
+MEMORY_TTL: int = 60  # seconds
+
+
+def cleanup_memory(
+    memory_dict: Dict[str, Any],
+    current_time: float
+) -> None:
+    """Clean up expired entries from memory dict."""
+    expired: list[str] = []
+
+    for key, timestamp in memory_dict.items():
+        if isinstance(timestamp, (int, float)) and current_time - timestamp > MEMORY_TTL:
+            expired.append(key)
+
+    for key in expired:
+        del memory_dict[key]
 
 
 # ======================================
@@ -67,18 +85,21 @@ app.question_memory = {}
 # ======================================
 
 @app.route("/", methods=["GET"])
-def home():
-
-    return jsonify({
-        "service": "CurioNest AI Student Support Engine",
-        "version": "1.0",
-        "status": "running",
-        "phase": "Phase-1 Complete",
-        "endpoints": {
-            "health": "/health",
-            "ask_question": "/ask-question"
-        }
-    })
+def home() -> tuple[dict[str, Any], int]:
+    """Root endpoint: Service info and endpoints."""
+    return (
+        jsonify({
+            "service": "CurioNest AI Student Support Engine",
+            "version": "1.0",
+            "status": "running",
+            "phase": "Phase-1 Complete",
+            "endpoints": {
+                "health": "/health",
+                "ask_question": "/ask-question"
+            }
+        }),
+        200
+    )
 
 
 # ======================================
@@ -86,8 +107,8 @@ def home():
 # ======================================
 
 @app.route("/health", methods=["GET"])
-def health():
-
+def health() -> tuple[dict[str, str], int]:
+    """Health check endpoint."""
     return jsonify({"status": "ok"}), 200
 
 
@@ -97,14 +118,17 @@ def health():
 
 @app.route("/ask-question", methods=["POST"])
 @limiter.limit("10 per minute")
-def ask_question():
-
+def ask_question() -> tuple[Any, int]:
+    """Main endpoint: Process student question with safeguards."""
     logger.log("REQUEST_RECEIVED", "/ask-question")
 
-    client_ip = request.remote_addr
-    current_time = time.time()
+    client_ip: Optional[str] = request.remote_addr
+    current_time: float = time.time()
 
-    data = request.get_json(silent=True)
+    cleanup_memory(app.session_memory, current_time)
+    cleanup_memory(app.request_memory, current_time)
+
+    data: Optional[Dict[str, Any]] = request.get_json(silent=True)
 
     if not data:
         logger.log("INVALID_JSON", None)
@@ -115,25 +139,19 @@ def ask_question():
 # IDENTITY RESOLUTION
 # ======================================
 
-    identity_token = request.headers.get("X-Identity-Token")
+    identity_token: str = request.headers.get("X-Identity-Token", str(uuid.uuid4()))
 
-    if not identity_token:
-        identity_token = str(uuid.uuid4())
-
-    identity_id = identity_engine.resolve_identity(identity_token)
+    identity_id: str = identity_engine.resolve_identity(identity_token)
 
 
 # ======================================
 # SESSION RESOLUTION
 # ======================================
 
-    session_id = request.headers.get("X-Session-ID")
-
-    if not session_id:
-        session_id = data.get("session_id")
-
-    if not session_id:
-        session_id = str(uuid.uuid4())
+    session_id: str = request.headers.get(
+        "X-Session-ID",
+        data.get("session_id", str(uuid.uuid4()))
+    )
 
     identity_engine.register_session(identity_id, session_id)
 
@@ -142,41 +160,34 @@ def ask_question():
 # SESSION BURST PROTECTION
 # ======================================
 
-    last_session_time = app.session_memory.get(session_id)
+    last_session_time: Optional[float] = app.session_memory.get(session_id)
 
     if last_session_time and (current_time - last_session_time) < 1.0:
-
         logger.log("SESSION_BURST_BLOCKED", session_id)
-
-        return jsonify({
-            "error": "Session request burst detected"
-        }), 429
+        return jsonify({"error": "Session request burst detected"}), 429
 
     app.session_memory[session_id] = current_time
 
 
 # ======================================
-# IP RATE ANOMALY PROTECTION
+# IP RATE PROTECTION
 # ======================================
 
-    last_ip_time = app.request_memory.get(client_ip)
+    if client_ip:
+        last_ip_time: Optional[float] = app.request_memory.get(client_ip)
 
-    if last_ip_time and (current_time - last_ip_time) < 1.5:
+        if last_ip_time and (current_time - last_ip_time) < 1.5:
+            logger.log("RATE_ANOMALY_DETECTED", client_ip)
+            return jsonify({"error": "Too many rapid requests"}), 429
 
-        logger.log("RATE_ANOMALY_DETECTED", client_ip)
-
-        return jsonify({
-            "error": "Too many rapid requests"
-        }), 429
-
-    app.request_memory[client_ip] = current_time
+        app.request_memory[client_ip] = current_time
 
 
 # ======================================
 # INPUT VALIDATION
 # ======================================
 
-    question = data.get("question")
+    question: Optional[str] = data.get("question")
 
     if not question:
         return jsonify({"error": "question required"}), 400
@@ -186,23 +197,19 @@ def ask_question():
 
 
 # ======================================
-# QUESTION SAFETY CHECKS
+# QUESTION SAFETY
 # ======================================
 
-    MAX_QUESTION_LENGTH = 500
+    MAX_QUESTION_LENGTH: int = 500
 
     if len(question) > MAX_QUESTION_LENGTH:
-
         logger.log("QUESTION_TOO_LONG", len(question))
-
         return jsonify({"error": "Question too long"}), 400
 
-    word_count = len(question.split())
+    word_count: int = len(question.split())
 
     if word_count > 80:
-
         logger.log("QUESTION_COMPLEXITY_BLOCKED", word_count)
-
         return jsonify({"error": "Question too complex"}), 400
 
 
@@ -210,31 +217,25 @@ def ask_question():
 # DUPLICATE QUESTION GUARD
 # ======================================
 
-    normalized_question = question.strip().lower()
+    normalized_question: str = " ".join(question.lower().split())
 
-    last_question = app.question_memory.get(client_ip)
+    last_question: Optional[str] = app.question_memory.get(client_ip) if client_ip else None
 
     if last_question and last_question == normalized_question:
+        logger.log("DUPLICATE_QUESTION_BLOCKED", client_ip)
+        return jsonify({"error": "Duplicate question detected"}), 429
 
-        logger.log("DUPLICATE_QUESTION_BLOCKED", {
-            "ip": client_ip,
-            "question": question
-        })
-
-        return jsonify({
-            "error": "Duplicate question detected"
-        }), 429
-
-    app.question_memory[client_ip] = normalized_question
+    if client_ip:
+        app.question_memory[client_ip] = normalized_question
 
 
 # ======================================
-# DOMAIN RESOLUTION (BLOCK 16)
+# DOMAIN RESOLUTION
 # ======================================
 
-    domain = domain_engine.resolve_domain(data)
+    domain: str = domain_engine.resolve_domain(data)
 
-    context = domain_engine.build_context(domain, data)
+    context: Dict[str, Any] = domain_engine.build_context(domain, data)
 
 
 # ======================================
@@ -243,27 +244,19 @@ def ask_question():
 
     logger.log("QUESTION_RECEIVED", {
         "question": question,
-        "context": context,
         "session_id": session_id,
-        "identity_id": str(identity_id),
         "domain": domain
     })
 
     try:
-
-        result = agent.receive_question(
+        result: str = agent.receive_question(
             question,
             context,
-            session_id=session_id
+            session_id=session_id  # Assuming agent_v4 supports this kwarg; add if needed
         )
-
-    except Exception as e:
-
+    except Exception as e:  # pylint: disable=broad-except
         logger.log("AGENT_RUNTIME_EXCEPTION", str(e))
-
-        return jsonify({
-            "error": "Internal processing failure"
-        }), 500
+        return jsonify({"error": "Internal processing failure"}), 500
 
 
 # ======================================
@@ -272,9 +265,7 @@ def ask_question():
 
     logger.log("AGENT_DECISION", str(result))
 
-    response = jsonify({
-        "result": result
-    })
+    response: "Response" = jsonify({"result": result})  # type: ignore[import]
 
     response.headers["X-Session-ID"] = session_id
     response.headers["X-Identity-Token"] = identity_token
@@ -287,9 +278,8 @@ def ask_question():
 # ======================================
 
 if __name__ == "__main__":
-
     app.run(
         host="0.0.0.0",
-        port=5000,
-        debug=True
+        port=int(os.getenv("PORT", 5000)),  # Use env var for port (Heroku/Procfile compatible)
+        debug=bool(int(os.getenv("FLASK_DEBUG", 0))),  # Safe debug from env
     )
