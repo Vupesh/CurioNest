@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from "react";
 import axios from "axios";
 
-/* ✅ Safe fallback prevents broken API calls */
+/* API base */
 const API_BASE = process.env.REACT_APP_API_BASE || "http://127.0.0.1:5000";
 
+/* Subjects */
 const SUBJECTS = {
   Physics: ["Laws of Motion", "Work Energy Power", "Gravitation"],
   Chemistry: ["Atomic Structure", "Chemical Bonding"],
@@ -11,14 +12,26 @@ const SUBJECTS = {
   Biology: ["Cell Structure", "Plant Processes"]
 };
 
+/* Session tracking for analytics + lead engine */
+function getSessionId() {
+  let id = localStorage.getItem("curionest_session");
+
+  if (!id) {
+    id = "sess_" + Math.random().toString(36).substring(2, 10);
+    localStorage.setItem("curionest_session", id);
+  }
+
+  return id;
+}
+
+/* Interpret backend responses */
 function interpretResponse(raw) {
   if (!raw) return { text: "", type: "empty" };
 
-  if (raw.includes("Insufficient information in provided syllabus content")) {
+  if (raw.includes("Insufficient information")) {
     return {
       text:
-        "I don’t have enough material in this chapter to answer confidently. " +
-        "Try selecting a different chapter or rephrasing the question.",
+        "I don’t have enough material in this chapter to answer confidently. Try selecting a different chapter or rephrasing the question.",
       type: "system"
     };
   }
@@ -39,7 +52,8 @@ function interpretResponse(raw) {
 
   if (raw.includes("ESCALATE TO SME")) {
     return {
-      text: "This question requires teacher assistance. It will be reviewed.",
+      text:
+        "This question may require teacher assistance. A teacher will review it.",
       type: "escalation"
     };
   }
@@ -47,7 +61,7 @@ function interpretResponse(raw) {
   return { text: raw, type: "ai" };
 }
 
-/* ✅ Deterministic Network Failure Classifier (Block 8.20) */
+/* Axios error interpreter */
 function interpretAxiosError(err) {
   if (err.response) {
     if (err.response.data && err.response.data.error) {
@@ -93,7 +107,6 @@ function App() {
   const [thinkingDots, setThinkingDots] = useState("");
   const [history, setHistory] = useState([]);
 
-  /* ✅ Block 8.21 — Active Request Controller */
   const [abortController, setAbortController] = useState(null);
 
   useEffect(() => {
@@ -149,7 +162,6 @@ function App() {
       return;
     }
 
-    /* ✅ Cancel previous request */
     if (abortController) {
       abortController.abort();
     }
@@ -164,9 +176,11 @@ function App() {
     setResponse({ text: "Thinking", type: "system" });
 
     try {
+
       const res = await axios.post(
         `${API_BASE}/ask-question`,
         {
+          session_id: getSessionId(),
           question,
           subject,
           chapter
@@ -192,6 +206,7 @@ function App() {
       setQuestion("");
 
     } catch (err) {
+
       if (err.name === "CanceledError" || err.code === "ERR_CANCELED") {
         return;
       }

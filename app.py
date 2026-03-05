@@ -8,7 +8,6 @@ from flask_cors import CORS
 from data.documents import DOCUMENTS
 from engine.agent_v4 import StudentSupportAgentV4
 from engine.rag import ChromaRAGStore
-from services.email_service import EmailService
 from services.logging_service import LoggingService
 
 from flask_limiter import Limiter
@@ -18,7 +17,7 @@ from flask_limiter.util import get_remote_address
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app)  # ✅ REQUIRED for React ↔ Flask communication
+CORS(app)
 
 limiter = Limiter(
     get_remote_address,
@@ -28,7 +27,7 @@ limiter = Limiter(
 
 rag_store = ChromaRAGStore(documents=DOCUMENTS)
 agent = StudentSupportAgentV4(rag_store)
-email_service = EmailService()
+
 logger = LoggingService()
 
 
@@ -58,31 +57,54 @@ def ask_question():
     client_ip = request.remote_addr
     current_time = time.time()
 
+    # -------------------------
+    # Session ID extraction
+    # -------------------------
+
+    data = request.get_json(silent=True)
+
     session_id = request.headers.get("X-Session-ID")
+
+    if data and data.get("session_id"):
+        session_id = data.get("session_id")
+
     if not session_id:
         session_id = str(uuid.uuid4())
+
+    # -------------------------
+    # Session burst protection
+    # -------------------------
 
     if not hasattr(app, "session_memory"):
         app.session_memory = {}
 
     last_session_time = app.session_memory.get(session_id)
+
     if last_session_time and (current_time - last_session_time) < 1.0:
         logger.log("SESSION_BURST_BLOCKED", session_id)
         return jsonify({"error": "Session request burst detected"}), 429
 
     app.session_memory[session_id] = current_time
 
+    # -------------------------
+    # IP anomaly detection
+    # -------------------------
+
     if not hasattr(app, "request_memory"):
         app.request_memory = {}
 
     last_time = app.request_memory.get(client_ip)
+
     if last_time and (current_time - last_time) < 1.5:
         logger.log("RATE_ANOMALY_DETECTED", client_ip)
         return jsonify({"error": "Too many rapid requests"}), 429
 
     app.request_memory[client_ip] = current_time
 
-    data = request.get_json(silent=True)
+    # -------------------------
+    # JSON validation
+    # -------------------------
+
     if not data:
         logger.log("INVALID_JSON", None)
         return jsonify({"error": "Invalid JSON"}), 400
@@ -105,15 +127,25 @@ def ask_question():
         })
         return jsonify({"error": "Invalid data types"}), 400
 
+    # -------------------------
+    # Question safety checks
+    # -------------------------
+
     MAX_QUESTION_LENGTH = 500
+
     if len(question) > MAX_QUESTION_LENGTH:
         logger.log("QUESTION_TOO_LONG", len(question))
         return jsonify({"error": "Question too long"}), 400
 
     word_count = len(question.split())
+
     if word_count > 80:
         logger.log("QUESTION_COMPLEXITY_BLOCKED", word_count)
         return jsonify({"error": "Question too complex"}), 400
+
+    # -------------------------
+    # Duplicate question guard
+    # -------------------------
 
     if not hasattr(app, "question_memory"):
         app.question_memory = {}
@@ -130,11 +162,15 @@ def ask_question():
 
     app.question_memory[client_ip] = normalized_question
 
-    logger.log("QUESTION_SIZE", len(question))
+    # -------------------------
+    # Agent execution
+    # -------------------------
+
     logger.log("QUESTION_RECEIVED", {
         "question": question,
         "subject": subject,
-        "chapter": chapter
+        "chapter": chapter,
+        "session_id": session_id
     })
 
     context = {
@@ -142,41 +178,20 @@ def ask_question():
         "chapter": chapter
     }
 
-    logger.log("AGENT_CALL", {
-        "component": "StudentSupportAgentV4",
-        "operation": "receive_question"
-    })
-
     try:
-        result = agent.receive_question(question, context)
+
+        result = agent.receive_question(
+            question,
+            context,
+            session_id=session_id
+        )
+
     except Exception as e:
+
         logger.log("AGENT_RUNTIME_EXCEPTION", str(e))
         return jsonify({"error": "Internal processing failure"}), 500
 
     logger.log("AGENT_DECISION", str(result))
-
-    if "ESCALATE" in str(result):
-        logger.log("ESCALATION_TRIGGERED", {
-            "reason": str(result),
-            "question": question,
-            "subject": subject,
-            "chapter": chapter
-        })
-
-        email_service.send_escalation(
-            subject=f"CurioNest Escalation | {subject} - {chapter}",
-            body=f"""
-Student Question:
-{question}
-
-Context:
-Subject: {subject}
-Chapter: {chapter}
-
-Engine Decision:
-{result}
-"""
-        )
 
     response = jsonify({"result": result})
     response.headers["X-Session-ID"] = session_id
