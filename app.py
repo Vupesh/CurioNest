@@ -12,6 +12,7 @@ from flask_limiter.util import get_remote_address
 from engine.rag import ChromaRAGStore
 from engine.agent_v4 import StudentSupportAgentV4
 from engine.identity_engine import IdentityEngine
+from engine.domain_engine import DomainEngine
 
 from services.logging_service import LoggingService
 
@@ -49,6 +50,8 @@ agent = StudentSupportAgentV4(rag_store)
 
 identity_engine = IdentityEngine()
 
+domain_engine = DomainEngine()
+
 
 # ======================================
 # MEMORY GUARDS (ANTI-ABUSE)
@@ -70,6 +73,7 @@ def home():
         "service": "CurioNest AI Student Support Engine",
         "version": "1.0",
         "status": "running",
+        "phase": "Phase-1 Complete",
         "endpoints": {
             "health": "/health",
             "ask_question": "/ask-question"
@@ -131,7 +135,6 @@ def ask_question():
     if not session_id:
         session_id = str(uuid.uuid4())
 
-    # critical: always register session
     identity_engine.register_session(identity_id, session_id)
 
 
@@ -153,7 +156,7 @@ def ask_question():
 
 
 # ======================================
-# IP ANOMALY DETECTION
+# IP RATE ANOMALY PROTECTION
 # ======================================
 
     last_ip_time = app.request_memory.get(client_ip)
@@ -174,26 +177,12 @@ def ask_question():
 # ======================================
 
     question = data.get("question")
-    subject = data.get("subject")
-    chapter = data.get("chapter")
 
-    if not question or not subject or not chapter:
+    if not question:
+        return jsonify({"error": "question required"}), 400
 
-        logger.log("VALIDATION_FAILED", data)
-
-        return jsonify({
-            "error": "question, subject, and chapter are required"
-        }), 400
-
-    if not isinstance(question, str) \
-       or not isinstance(subject, str) \
-       or not isinstance(chapter, str):
-
-        logger.log("TYPE_VALIDATION_FAILED", data)
-
-        return jsonify({
-            "error": "Invalid data types"
-        }), 400
+    if not isinstance(question, str):
+        return jsonify({"error": "Invalid question type"}), 400
 
 
 # ======================================
@@ -240,21 +229,25 @@ def ask_question():
 
 
 # ======================================
+# DOMAIN RESOLUTION (BLOCK 16)
+# ======================================
+
+    domain = domain_engine.resolve_domain(data)
+
+    context = domain_engine.build_context(domain, data)
+
+
+# ======================================
 # AGENT EXECUTION
 # ======================================
 
     logger.log("QUESTION_RECEIVED", {
         "question": question,
-        "subject": subject,
-        "chapter": chapter,
+        "context": context,
         "session_id": session_id,
-        "identity_id": str(identity_id)
+        "identity_id": str(identity_id),
+        "domain": domain
     })
-
-    context = {
-        "subject": subject,
-        "chapter": chapter
-    }
 
     try:
 
@@ -268,7 +261,9 @@ def ask_question():
 
         logger.log("AGENT_RUNTIME_EXCEPTION", str(e))
 
-        return jsonify({"error": "Internal processing failure"}), 500
+        return jsonify({
+            "error": "Internal processing failure"
+        }), 500
 
 
 # ======================================
@@ -277,7 +272,9 @@ def ask_question():
 
     logger.log("AGENT_DECISION", str(result))
 
-    response = jsonify({"result": result})
+    response = jsonify({
+        "result": result
+    })
 
     response.headers["X-Session-ID"] = session_id
     response.headers["X-Identity-Token"] = identity_token
