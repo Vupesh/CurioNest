@@ -11,7 +11,7 @@ Never trust python command on Windows.
 
 DB Commands :
 psql -U postgres
-\c curionest_db
+\c curionest_db Kaushik@Ommi
 
 Always use:
 
