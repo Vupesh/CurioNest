@@ -25,11 +25,10 @@ class LeadPersistenceService:
             self.logger.log("DB_CONNECTION_ERROR", str(e))
             self.conn = None
 
-        # Event Logger
         self.event_logger = EventLogger()
 
     # =============================
-    # UPSERT LEAD
+    # UPSERT LEAD (SESSION SAFE)
     # =============================
 
     def upsert_lead(
@@ -54,38 +53,59 @@ class LeadPersistenceService:
 
             cursor = self.conn.cursor()
 
+            # 1️⃣ Check if lead already exists for session
+
             cursor.execute(
                 """
-                INSERT INTO leads (
-                    session_id,
-                    subject,
-                    chapter,
-                    question,
-                    escalation_code,
-                    escalation_reason,
-                    confidence,
-                    engagement_score,
-                    intent_strength,
-                    status
-                )
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                RETURNING id
+                SELECT id FROM leads
+                WHERE session_id = %s
+                LIMIT 1
                 """,
-                (
-                    session_id,
-                    subject,
-                    chapter,
-                    question,
-                    escalation_code,
-                    escalation_reason,
-                    confidence,
-                    engagement_score,
-                    intent_strength,
-                    status,
-                ),
+                (session_id,)
             )
 
-            lead_id = cursor.fetchone()[0]
+            existing = cursor.fetchone()
+
+            if existing:
+
+                lead_id = existing[0]
+
+            else:
+
+                # 2️⃣ Create new lead
+
+                cursor.execute(
+                    """
+                    INSERT INTO leads (
+                        session_id,
+                        subject,
+                        chapter,
+                        question,
+                        escalation_code,
+                        escalation_reason,
+                        confidence,
+                        engagement_score,
+                        intent_strength,
+                        status
+                    )
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    RETURNING id
+                    """,
+                    (
+                        session_id,
+                        subject,
+                        chapter,
+                        question,
+                        escalation_code,
+                        escalation_reason,
+                        confidence,
+                        engagement_score,
+                        intent_strength,
+                        status,
+                    ),
+                )
+
+                lead_id = cursor.fetchone()[0]
 
             cursor.close()
 
@@ -102,6 +122,7 @@ class LeadPersistenceService:
                     confidence,
                     engagement_score,
                 )
+
             except Exception as event_error:
                 self.logger.log("EVENT_LOGGING_FAILED", str(event_error))
 
