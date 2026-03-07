@@ -28,7 +28,7 @@ class LeadPersistenceService:
         self.event_logger = EventLogger()
 
     # =============================
-    # UPSERT LEAD (SESSION SAFE)
+    # UPSERT LEAD (SESSION SAFE + SCORE EVOLUTION)
     # =============================
 
     def upsert_lead(
@@ -57,7 +57,8 @@ class LeadPersistenceService:
 
             cursor.execute(
                 """
-                SELECT id FROM leads
+                SELECT id, confidence
+                FROM leads
                 WHERE session_id = %s
                 LIMIT 1
                 """,
@@ -69,10 +70,41 @@ class LeadPersistenceService:
             if existing:
 
                 lead_id = existing[0]
+                existing_confidence = existing[1]
+
+                # 2️⃣ Update lead if new signal is stronger
+
+                if confidence > existing_confidence:
+
+                    cursor.execute(
+                        """
+                        UPDATE leads
+                        SET confidence = %s,
+                            escalation_code = %s,
+                            escalation_reason = %s,
+                            updated_at = NOW()
+                        WHERE id = %s
+                        """,
+                        (
+                            confidence,
+                            escalation_code,
+                            escalation_reason,
+                            lead_id,
+                        ),
+                    )
+
+                    self.logger.log(
+                        "LEAD_CONFIDENCE_UPDATED",
+                        {
+                            "session_id": session_id,
+                            "old_confidence": existing_confidence,
+                            "new_confidence": confidence,
+                        },
+                    )
 
             else:
 
-                # 2️⃣ Create new lead
+                # 3️⃣ Create new lead
 
                 cursor.execute(
                     """
@@ -107,6 +139,14 @@ class LeadPersistenceService:
 
                 lead_id = cursor.fetchone()[0]
 
+                self.logger.log(
+                    "LEAD_CREATED",
+                    {
+                        "session_id": session_id,
+                        "confidence": confidence,
+                    },
+                )
+
             cursor.close()
 
             # =============================
@@ -114,6 +154,7 @@ class LeadPersistenceService:
             # =============================
 
             try:
+
                 self.event_logger.log_event(
                     lead_id,
                     session_id,
@@ -124,6 +165,7 @@ class LeadPersistenceService:
                 )
 
             except Exception as event_error:
+
                 self.logger.log("EVENT_LOGGING_FAILED", str(event_error))
 
             return lead_id

@@ -1,5 +1,6 @@
 venv\Scripts\activate
 cmd /k venv\Scripts\activate.bat
+Run exm.py only inside venv
 
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
