@@ -14,6 +14,7 @@ from engine.rag import ChromaRAGStore
 from engine.agent_v4 import StudentSupportAgentV4
 from engine.identity_engine import IdentityEngine
 from engine.domain_engine import DomainEngine
+from engine.lead_persistence import LeadPersistenceService
 
 from services.logging_service import LoggingService
 
@@ -28,7 +29,7 @@ app: Flask = Flask(__name__)
 
 CORS(
     app,
-    resources={r"/*": {"origins": "*"}},  # TODO: Tighten origins for production (e.g., specific domains)
+    resources={r"/*": {"origins": "*"}},
     supports_credentials=True
 )
 
@@ -53,23 +54,25 @@ identity_engine: IdentityEngine = IdentityEngine()
 
 domain_engine: DomainEngine = DomainEngine()
 
+lead_persistence: LeadPersistenceService = LeadPersistenceService()
+
 
 # ======================================
 # MEMORY GUARDS
 # ======================================
 
-app.session_memory = {}  # type: Dict[str, float]
-app.request_memory = {}  # type: Dict[str, float]
-app.question_memory = {}  # type: Dict[str, str]
+app.session_memory = {}
+app.request_memory = {}
+app.question_memory = {}
 
-MEMORY_TTL: int = 60  # seconds
+MEMORY_TTL: int = 60
 
 
 def cleanup_memory(
     memory_dict: Dict[str, Any],
     current_time: float
 ) -> None:
-    """Clean up expired entries from memory dict."""
+
     expired: list[str] = []
 
     for key, timestamp in memory_dict.items():
@@ -86,7 +89,7 @@ def cleanup_memory(
 
 @app.route("/", methods=["GET"])
 def home() -> tuple[dict[str, Any], int]:
-    """Root endpoint: Service info and endpoints."""
+
     return (
         jsonify({
             "service": "CurioNest AI Student Support Engine",
@@ -95,7 +98,8 @@ def home() -> tuple[dict[str, Any], int]:
             "phase": "Phase-1 Complete",
             "endpoints": {
                 "health": "/health",
-                "ask_question": "/ask-question"
+                "ask_question": "/ask-question",
+                "capture_contact": "/capture-contact"
             }
         }),
         200
@@ -108,7 +112,7 @@ def home() -> tuple[dict[str, Any], int]:
 
 @app.route("/health", methods=["GET"])
 def health() -> tuple[dict[str, str], int]:
-    """Health check endpoint."""
+
     return jsonify({"status": "ok"}), 200
 
 
@@ -119,7 +123,7 @@ def health() -> tuple[dict[str, str], int]:
 @app.route("/ask-question", methods=["POST"])
 @limiter.limit("10 per minute")
 def ask_question() -> tuple[Any, int]:
-    """Main endpoint: Process student question with safeguards."""
+
     logger.log("REQUEST_RECEIVED", "/ask-question")
 
     client_ip: Optional[str] = request.remote_addr
@@ -174,6 +178,7 @@ def ask_question() -> tuple[Any, int]:
 # ======================================
 
     if client_ip:
+
         last_ip_time: Optional[float] = app.request_memory.get(client_ip)
 
         if last_ip_time and (current_time - last_ip_time) < 1.5:
@@ -252,9 +257,9 @@ def ask_question() -> tuple[Any, int]:
         result: str = agent.receive_question(
             question,
             context,
-            session_id=session_id  # Assuming agent_v4 supports this kwarg; add if needed
+            session_id=session_id
         )
-    except Exception as e:  # pylint: disable=broad-except
+    except Exception as e:
         logger.log("AGENT_RUNTIME_EXCEPTION", str(e))
         return jsonify({"error": "Internal processing failure"}), 500
 
@@ -265,7 +270,7 @@ def ask_question() -> tuple[Any, int]:
 
     logger.log("AGENT_DECISION", str(result))
 
-    response: "Response" = jsonify({"result": result})  # type: ignore[import]
+    response = jsonify({"result": result})
 
     response.headers["X-Session-ID"] = session_id
     response.headers["X-Identity-Token"] = identity_token
@@ -274,12 +279,52 @@ def ask_question() -> tuple[Any, int]:
 
 
 # ======================================
+# CONTACT CAPTURE ENDPOINT
+# ======================================
+
+@app.route("/capture-contact", methods=["POST"])
+@limiter.limit("10 per minute")
+def capture_contact() -> tuple[Any, int]:
+
+    logger.log("CONTACT_CAPTURE_REQUEST", "/capture-contact")
+
+    data = request.get_json(silent=True)
+
+    if not data:
+        return jsonify({"error": "Invalid JSON"}), 400
+
+    lead_id = data.get("lead_id")
+    name = data.get("name")
+    email = data.get("email")
+    phone = data.get("phone")
+
+    if not lead_id:
+        return jsonify({"error": "lead_id required"}), 400
+
+    success = lead_persistence.save_contact(
+        lead_id=lead_id,
+        name=name,
+        email=email,
+        phone=phone
+    )
+
+    if not success:
+        logger.log("CONTACT_CAPTURE_FAILED", lead_id)
+        return jsonify({"error": "Contact save failed"}), 500
+
+    logger.log("CONTACT_CAPTURE_SUCCESS", lead_id)
+
+    return jsonify({"status": "contact saved"}), 200
+
+
+# ======================================
 # SERVER ENTRY
 # ======================================
 
 if __name__ == "__main__":
+
     app.run(
         host="0.0.0.0",
-        port=int(os.getenv("PORT", 5000)),  # Use env var for port (Heroku/Procfile compatible)
-        debug=bool(int(os.getenv("FLASK_DEBUG", 0))),  # Safe debug from env
+        port=int(os.getenv("PORT", 5000)),
+        debug=bool(int(os.getenv("FLASK_DEBUG", 0))),
     )
