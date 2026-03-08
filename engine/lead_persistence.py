@@ -62,7 +62,7 @@ class LeadPersistenceService:
                 WHERE session_id = %s
                 LIMIT 1
                 """,
-                (session_id,)
+                (session_id,),
             )
 
             existing = cursor.fetchone()
@@ -174,3 +174,54 @@ class LeadPersistenceService:
 
             self.logger.log("LEAD_PERSISTENCE_ERROR", str(e))
             return None
+
+    # =============================
+    # SAVE CONTACT DETAILS
+    # =============================
+
+    def save_contact(self, lead_id, name=None, email=None, phone=None):
+
+        if not self.conn:
+            self.logger.log("DB_CONNECTION_MISSING", "Cannot persist contact")
+            return False
+
+        try:
+
+            cursor = self.conn.cursor()
+
+            cursor.execute(
+                """
+                INSERT INTO lead_contacts (
+                    lead_id,
+                    name,
+                    email,
+                    phone
+                )
+                VALUES (%s,%s,%s,%s)
+                """,
+                (
+                    lead_id,
+                    name,
+                    email,
+                    phone,
+                ),
+            )
+
+            cursor.close()
+
+            self.logger.log(
+                "CONTACT_CAPTURED",
+                {
+                    "lead_id": str(lead_id),
+                    "email": email,
+                    "phone": phone,
+                },
+            )
+
+            return True
+
+        except Exception as e:
+
+            self.logger.log("CONTACT_SAVE_ERROR", str(e))
+            return False
+            
