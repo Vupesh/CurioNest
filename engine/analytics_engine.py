@@ -1,6 +1,5 @@
 import os
 import psycopg2
-from psycopg2.extras import RealDictCursor
 
 
 class AnalyticsEngine:
@@ -12,104 +11,146 @@ class AnalyticsEngine:
             port=os.getenv("DB_PORT"),
             dbname=os.getenv("DB_NAME"),
             user=os.getenv("DB_USER"),
-            password=os.getenv("DB_PASSWORD")
+            password=os.getenv("DB_PASSWORD"),
         )
 
-    # --------------------------------------------------
-    # 1. Escalation Signal Distribution
-    # --------------------------------------------------
+    # ============================================
+    # TOTAL LEADS
+    # ============================================
 
-    def get_escalation_summary(self):
+    def total_leads(self):
 
-        query = """
-        SELECT event_code, COUNT(*) AS total
-        FROM lead_events
-        GROUP BY event_code
-        ORDER BY total DESC
-        """
+        cursor = self.conn.cursor()
 
-        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(query)
-            return cur.fetchall()
+        cursor.execute(
+            """
+            SELECT COUNT(*) FROM leads
+            """
+        )
 
-    # --------------------------------------------------
-    # 2. Teacher Demand Heatmap
-    # --------------------------------------------------
+        result = cursor.fetchone()[0]
 
-    def get_teacher_demand(self):
+        cursor.close()
 
-        query = """
-        SELECT subject, chapter, COUNT(*) AS demand
-        FROM leads
-        GROUP BY subject, chapter
-        ORDER BY demand DESC
-        """
+        return result
 
-        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(query)
-            return cur.fetchall()
+    # ============================================
+    # ESCALATION DISTRIBUTION
+    # ============================================
 
-    # --------------------------------------------------
-    # 3. Lead Funnel Distribution
-    # --------------------------------------------------
+    def escalation_distribution(self):
 
-    def get_lead_distribution(self):
+        cursor = self.conn.cursor()
 
-        query = """
-        SELECT status, COUNT(*) AS total
-        FROM leads
-        GROUP BY status
-        ORDER BY total DESC
-        """
+        cursor.execute(
+            """
+            SELECT event_code, COUNT(*)
+            FROM lead_events
+            GROUP BY event_code
+            ORDER BY COUNT(*) DESC
+            """
+        )
 
-        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(query)
-            return cur.fetchall()
+        rows = cursor.fetchall()
 
-    # --------------------------------------------------
-    # 4. Escalation Timeline
-    # --------------------------------------------------
+        cursor.close()
 
-    def get_escalation_trend(self):
+        return rows
 
-        query = """
-        SELECT DATE(created_at) AS day, COUNT(*) AS total
-        FROM leads
-        GROUP BY day
-        ORDER BY day ASC
-        """
+    # ============================================
+    # LEAD QUALITY DISTRIBUTION
+    # ============================================
 
-        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(query)
-            return cur.fetchall()
+    def lead_quality_distribution(self):
 
-    # --------------------------------------------------
-    # 5. Engagement Intelligence
-    # --------------------------------------------------
+        cursor = self.conn.cursor()
 
-    def get_engagement_metrics(self):
+        cursor.execute(
+            """
+            SELECT
+                CASE
+                    WHEN confidence >= 80 THEN 'HIGH'
+                    WHEN confidence >= 50 THEN 'MEDIUM'
+                    ELSE 'LOW'
+                END AS quality,
+                COUNT(*)
+            FROM leads
+            GROUP BY quality
+            ORDER BY quality
+            """
+        )
 
-        query = """
-        SELECT
-            AVG(engagement_score) AS avg_engagement,
-            MAX(engagement_score) AS max_engagement,
-            MIN(engagement_score) AS min_engagement
-        FROM leads
-        """
+        rows = cursor.fetchall()
 
-        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(query)
-            return cur.fetchone()
+        cursor.close()
 
-    # --------------------------------------------------
-    # Health check
-    # --------------------------------------------------
+        return rows
 
-    def get_total_leads(self):
+    # ============================================
+    # TOP SUBJECT DEMAND
+    # ============================================
 
-        query = "SELECT COUNT(*) FROM leads"
+    def subject_demand(self):
 
-        with self.conn.cursor() as cur:
-            cur.execute(query)
-            result = cur.fetchone()
-            return result[0]
+        cursor = self.conn.cursor()
+
+        cursor.execute(
+            """
+            SELECT subject, COUNT(*)
+            FROM leads
+            GROUP BY subject
+            ORDER BY COUNT(*) DESC
+            """
+        )
+
+        rows = cursor.fetchall()
+
+        cursor.close()
+
+        return rows
+
+    # ============================================
+    # TOP CHAPTER DEMAND
+    # ============================================
+
+    def chapter_demand(self):
+
+        cursor = self.conn.cursor()
+
+        cursor.execute(
+            """
+            SELECT chapter, COUNT(*)
+            FROM leads
+            GROUP BY chapter
+            ORDER BY COUNT(*) DESC
+            """
+        )
+
+        rows = cursor.fetchall()
+
+        cursor.close()
+
+        return rows
+
+    # ============================================
+    # ESCALATION TIMELINE
+    # ============================================
+
+    def escalation_timeline(self):
+
+        cursor = self.conn.cursor()
+
+        cursor.execute(
+            """
+            SELECT DATE(created_at), COUNT(*)
+            FROM lead_events
+            GROUP BY DATE(created_at)
+            ORDER BY DATE(created_at)
+            """
+        )
+
+        rows = cursor.fetchall()
+
+        cursor.close()
+
+        return rows

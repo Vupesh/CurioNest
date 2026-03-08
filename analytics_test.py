@@ -1,45 +1,24 @@
 from engine.analytics_engine import AnalyticsEngine
 
 
-def run_analytics():
+analytics = AnalyticsEngine()
 
-    analytics = AnalyticsEngine()
+print("\n===== CURIONEST ANALYTICS =====\n")
 
-    print("\n===== CurioNest Analytics Report =====\n")
+print("Total Leads:")
+print(analytics.total_leads())
 
-    print("1. Total Leads")
-    print("----------------")
-    print(analytics.get_total_leads())
+print("\nEscalation Distribution:")
+print(analytics.escalation_distribution())
 
-    print("\n2. Escalation Signals")
-    print("----------------")
-    signals = analytics.get_escalation_summary()
-    for row in signals:
-        print(row)
+print("\nLead Quality Distribution:")
+print(analytics.lead_quality_distribution())
 
-    print("\n3. Teacher Demand Heatmap")
-    print("----------------")
-    demand = analytics.get_teacher_demand()
-    for row in demand:
-        print(row)
+print("\nSubject Demand:")
+print(analytics.subject_demand())
 
-    print("\n4. Lead Funnel Distribution")
-    print("----------------")
-    funnel = analytics.get_lead_distribution()
-    for row in funnel:
-        print(row)
+print("\nChapter Demand:")
+print(analytics.chapter_demand())
 
-    print("\n5. Escalation Timeline")
-    print("----------------")
-    trend = analytics.get_escalation_trend()
-    for row in trend:
-        print(row)
-
-    print("\n6. Engagement Metrics")
-    print("----------------")
-    print(analytics.get_engagement_metrics())
-
-
-if __name__ == "__main__":
-    run_analytics()
-    
+print("\nEscalation Timeline:")
+print(analytics.escalation_timeline())
