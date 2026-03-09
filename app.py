@@ -99,7 +99,8 @@ def home() -> tuple[dict[str, Any], int]:
             "endpoints": {
                 "health": "/health",
                 "ask_question": "/ask-question",
-                "capture_contact": "/capture-contact"
+                "capture_contact": "/capture-contact",
+                "domain_config": "/domain-config"
             }
         }),
         200
@@ -114,6 +115,28 @@ def home() -> tuple[dict[str, Any], int]:
 def health() -> tuple[dict[str, str], int]:
 
     return jsonify({"status": "ok"}), 200
+
+
+# ======================================
+# DOMAIN CONFIGURATION API (NEW)
+# ======================================
+
+@app.route("/domain-config", methods=["GET"])
+def domain_config() -> tuple[Any, int]:
+
+    logger.log("DOMAIN_CONFIG_REQUEST", "/domain-config")
+
+    try:
+
+        config = domain_engine.get_domain_config()
+
+        return jsonify(config), 200
+
+    except Exception as e:
+
+        logger.log("DOMAIN_CONFIG_ERROR", str(e))
+
+        return jsonify({"error": "Failed to fetch domain configuration"}), 500
 
 
 # ======================================

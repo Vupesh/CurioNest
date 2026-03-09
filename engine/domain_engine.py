@@ -1,46 +1,106 @@
+import os
+import psycopg2
+from services.logging_service import LoggingService
+
+
 class DomainEngine:
 
     def __init__(self):
 
-        self.domains = {
-            "education": {
-                "fields": ["subject", "chapter"]
-            },
-            "saas": {
-                "fields": ["product", "feature"]
-            },
-            "consulting": {
-                "fields": ["service", "topic"]
-            }
-        }
+        self.logger = LoggingService()
+
+        try:
+
+            self.conn = psycopg2.connect(
+                host=os.getenv("DB_HOST"),
+                port=os.getenv("DB_PORT"),
+                dbname=os.getenv("DB_NAME"),
+                user=os.getenv("DB_USER"),
+                password=os.getenv("DB_PASSWORD"),
+            )
+
+            self.conn.autocommit = True
+
+        except Exception as e:
+
+            self.logger.log("DOMAIN_DB_CONNECTION_ERROR", str(e))
+            self.conn = None
+
+
+    # =====================================
+    # RESOLVE DOMAIN
+    # =====================================
 
     def resolve_domain(self, data):
 
-        domain = data.get("domain", "education")
+        domain = data.get("domain")
 
-        if domain not in self.domains:
-            domain = "education"
+        if not domain:
+            return "education"
 
         return domain
 
+
+    # =====================================
+    # BUILD CONTEXT
+    # =====================================
+
     def build_context(self, domain, data):
 
-        if domain == "education":
-            return {
-                "subject": data.get("subject"),
-                "chapter": data.get("chapter")
-            }
+        context = {
+            "domain": domain,
+            "board": data.get("board"),
+            "subject": data.get("subject"),
+            "chapter": data.get("chapter"),
+        }
 
-        if domain == "saas":
-            return {
-                "product": data.get("product"),
-                "feature": data.get("feature")
-            }
+        return context
 
-        if domain == "consulting":
-            return {
-                "service": data.get("service"),
-                "topic": data.get("topic")
-            }
 
-        return {}
+    # =====================================
+    # FETCH DOMAIN CONFIGURATION
+    # =====================================
+
+    def get_domain_config(self):
+
+        if not self.conn:
+            return {}
+
+        try:
+
+            cursor = self.conn.cursor()
+
+            cursor.execute("""
+                SELECT
+                    d.name as domain,
+                    b.name as board,
+                    c.name as category,
+                    t.name as topic
+                FROM domains d
+                JOIN boards b ON b.domain_id = d.id
+                JOIN categories c ON c.board_id = b.id
+                JOIN topics t ON t.category_id = c.id
+                ORDER BY d.name, b.name, c.name
+            """)
+
+            rows = cursor.fetchall()
+
+            cursor.close()
+
+            config = {}
+
+            for domain, board, category, topic in rows:
+
+                config.setdefault(domain, {})
+                config[domain].setdefault(board, {})
+                config[domain][board].setdefault(category, [])
+
+                config[domain][board][category].append(topic)
+
+            return config
+
+        except Exception as e:
+
+            self.logger.log("DOMAIN_CONFIG_FETCH_ERROR", str(e))
+            return {}
+        
