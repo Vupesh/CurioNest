@@ -14,6 +14,9 @@ DB Commands :
 psql -U postgres
 \c curionest_db Kaushik@Ommi
 
+npm start inside curionest_ui 
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned  (Inside Powrer shell)
+
 Always use:
 
 .\venv\Scripts\python.exe
