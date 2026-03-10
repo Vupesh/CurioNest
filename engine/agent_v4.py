@@ -10,21 +10,27 @@ from budget_guard import check_and_update
 class StudentSupportAgentV4:
 
     def __init__(self, rag_store, session_engine=None, ux_engine=None, lead_engine=None):
+
         self.rag_store = rag_store
         self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
         self.logger = LoggingService()
+
         self.session_engine = session_engine
         self.ux_engine = ux_engine
         self.lead_engine = lead_engine
+
         self.email_service = EmailService()
 
         # PostgreSQL Lead Persistence
         self.lead_persistence = LeadPersistenceService()
 
-        # Escalation Economics Engine (Block 13)
+        # Block 13
         self.economics_engine = EscalationEconomicsEngine()
 
-    # ================= ENTRY POINT =================
+    # ==================================================
+    # ENTRY POINT
+    # ==================================================
 
     def receive_question(self, question, context, session_id="default"):
 
@@ -50,6 +56,7 @@ class StudentSupportAgentV4:
             )
 
         if not identified or not isinstance(identified, dict):
+
             return self.escalate(
                 question,
                 None,
@@ -61,6 +68,7 @@ class StudentSupportAgentV4:
             )
 
         if self.session_engine:
+
             self.session_engine.update_on_question(
                 session_id,
                 identified.get("chapter"),
@@ -70,6 +78,7 @@ class StudentSupportAgentV4:
         try:
             decision = self.decide_action(identified)
         except Exception:
+
             return self.escalate(
                 question,
                 identified.get("subject"),
@@ -81,9 +90,12 @@ class StudentSupportAgentV4:
             )
 
         if decision == "RESPOND":
+
             try:
                 return self.respond(question, identified, session_id, intent_strength)
+
             except Exception:
+
                 return self.escalate(
                     question,
                     identified.get("subject"),
@@ -104,11 +116,14 @@ class StudentSupportAgentV4:
             intent_strength
         )
 
-    # ================= INTENT =================
+    # ==================================================
+    # INTENT DETECTION
+    # ==================================================
 
     def classify_intent(self, question):
 
         q = question.lower()
+
         intent = "KNOWLEDGE_QUERY"
         strength = 0
 
@@ -130,12 +145,15 @@ class StudentSupportAgentV4:
 
         return intent, strength
 
-    # ================= CONTEXT =================
+    # ==================================================
+    # CONTEXT
+    # ==================================================
 
     def identify_context(self, question, context):
 
         subject = context.get("subject")
         chapter = context.get("chapter")
+
         difficulty = self.detect_difficulty(question)
 
         return {
@@ -145,18 +163,24 @@ class StudentSupportAgentV4:
             "difficulty": difficulty
         }
 
-    # ================= DECISION =================
+    # ==================================================
+    # DECISION ENGINE
+    # ==================================================
 
     def decide_action(self, identified):
 
         if identified["difficulty"] == "advanced":
+
             identified["escalation_reason"] = "Advanced question requires teacher"
             identified["escalation_code"] = "ESC_ADVANCED_TOPIC"
+
             return "ESCALATE"
 
         return "RESPOND"
 
-    # ================= RESPONSE =================
+    # ==================================================
+    # RESPONSE ENGINE
+    # ==================================================
 
     def respond(self, question, identified, session_id, intent_strength):
 
@@ -167,7 +191,9 @@ class StudentSupportAgentV4:
         )
 
         if not chunks:
+
             if intent_strength >= 2:
+
                 return self.escalate(
                     question,
                     identified["subject"],
@@ -178,10 +204,12 @@ class StudentSupportAgentV4:
                     intent_strength
                 )
 
-            return "I could not find exact syllabus content. Could you clarify?"
+            return "I could not find exact syllabus content. Could you clarify your question?"
 
         if len(chunks) < 2:
+
             if intent_strength >= 2:
+
                 return self.escalate(
                     question,
                     identified["subject"],
@@ -196,15 +224,18 @@ class StudentSupportAgentV4:
 
         return self.explain_with_ai(question, chunks, session_id, intent_strength)
 
-    # ================= AI =================
+    # ==================================================
+    # AI EXPLANATION ENGINE
+    # ==================================================
 
     def explain_with_ai(self, question, chunks, session_id, intent_strength):
 
-        content = "\n".join(chunks)
+        content = "\n\n".join(chunks)
 
         exceeded, reason = check_and_update(0)
 
         if exceeded:
+
             return self.escalate(
                 question,
                 None,
@@ -217,23 +248,56 @@ class StudentSupportAgentV4:
 
         try:
 
+            prompt = f"""
+You are a friendly and supportive tutor helping a student understand concepts from their syllabus.
+
+Use ONLY the syllabus content below.
+
+Context:
+{content}
+
+Student Question:
+{question}
+
+Answer using this format:
+
+1. Concept Explanation
+Explain the concept clearly in simple language.
+
+2. Key Formula (if relevant)
+Show the formula and explain the variables.
+
+3. Example
+Provide a small example to make the idea easier.
+
+Rules:
+- Stay strictly within the provided context.
+- Do not invent information outside the syllabus.
+- Use a friendly tone suitable for students.
+
+End with a short encouraging follow-up question.
+Example:
+"Would you like to see a quick example?"
+"""
+
             response = self.client.chat.completions.create(
+
                 model="gpt-4o-mini",
-                max_tokens=300,
+
+                max_tokens=350,
+
                 messages=[
-                    {
-                        "role": "system",
-                        "content": "Answer strictly from syllabus content."
-                    },
-                    {
-                        "role": "user",
-                        "content": f"{content}\n\nQuestion:{question}"
-                    }
+                    {"role": "system", "content": "You are a helpful academic tutor."},
+                    {"role": "user", "content": prompt}
                 ],
+
+                temperature=0.2,
+
                 timeout=8
             )
 
         except Exception:
+
             return self.escalate(
                 question,
                 None,
@@ -244,16 +308,26 @@ class StudentSupportAgentV4:
                 intent_strength
             )
 
-        return response.choices[0].message.content
+        answer = response.choices[0].message.content.strip()
 
-    # ================= ESCALATION =================
+        self.logger.log("AI_RESPONSE_GENERATED", {
+            "session_id": session_id
+        })
+
+        return answer
+
+    # ==================================================
+    # ESCALATION
+    # ==================================================
 
     def escalate(self, question, subject, chapter, reason, code, session_id, intent_strength=0):
 
         engagement_score = 0
 
         if self.session_engine:
+
             self.session_engine.update_on_escalation(session_id)
+
             engagement_score = self.session_engine.calculate_engagement_score(session_id)
 
         escalation_confidence = self.compute_escalation_confidence(
@@ -261,8 +335,6 @@ class StudentSupportAgentV4:
             intent_strength,
             code
         )
-
-        # -------- Block 13: Lead Economics --------
 
         lead_score = self.economics_engine.compute_lead_quality_score(
             escalation_confidence,
@@ -294,8 +366,6 @@ class StudentSupportAgentV4:
             "priority": priority
         })
 
-        # Persist Lead
-
         lead_id = self.lead_persistence.upsert_lead(
             session_id=session_id,
             subject=subject,
@@ -308,8 +378,6 @@ class StudentSupportAgentV4:
             intent_strength=intent_strength,
             status="QUALIFIED" if escalation_confidence >= 40 else "NEW"
         )
-
-        # Email notification
 
         if escalation_confidence >= 40:
 
@@ -332,8 +400,6 @@ Priority: {priority}
 
             self.email_service.send_escalation(subject_line, body)
 
-        # UX layer
-
         if self.ux_engine:
 
             eligible = self.ux_engine.evaluate(
@@ -351,7 +417,9 @@ Priority: {priority}
 
         return f"ESCALATE TO SME: {reason}"
 
-    # ================= CONFIDENCE =================
+    # ==================================================
+    # CONFIDENCE
+    # ==================================================
 
     def compute_escalation_confidence(self, engagement_score, intent_strength, escalation_code=None):
 
@@ -362,7 +430,9 @@ Priority: {priority}
 
         return max(0, min(score, 100))
 
-    # ================= DIFFICULTY =================
+    # ==================================================
+    # DIFFICULTY
+    # ==================================================
 
     def detect_difficulty(self, question):
 
