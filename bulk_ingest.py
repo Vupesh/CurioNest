@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from knowledge_ingest import ingest_document
 from engine.rag import ChromaRAGStore
 
-DOCS_DIR = "docs"
+DOCS_DIR = "docs II"
 VERSION = "v1"
 
 HASH_FILE = "ingest_hashes.json"

@@ -21,4 +21,9 @@ Thumbs.db
 *.sqlite
 *.sqlite3
 
+docs/
+docs II/
+docs_v2/
+vector_db/
+chroma/
 
