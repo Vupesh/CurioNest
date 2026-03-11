@@ -22,7 +22,7 @@ def scan_and_ingest():
                 continue
 
             for file in os.listdir(chapter_path):
-                if not file.lower().endswith(".pdf"):
+                if not file.lower().endswith((".pdf", ".txt")):
                     continue
 
                 file_path = os.path.join(chapter_path, file)
