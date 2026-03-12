@@ -1,10 +1,13 @@
 import os
+import uuid
 import chromadb
+
 from chromadb.config import Settings
 
 from langchain_openai import OpenAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
+
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CHROMA_DIR = os.path.join(BASE_DIR, "chroma_db")
@@ -14,11 +17,9 @@ COLLECTION_NAME = "curionest"
 
 def ingest_document(file_path, subject, chapter, source, version):
 
-    print(f"Ingesting: {file_path}")
+    print(f"\nIngesting: {file_path}")
 
-    # =========================
-    # Loader Selection
-    # =========================
+    file_name = os.path.basename(file_path)
 
     ext = os.path.splitext(file_path)[1].lower()
 
@@ -33,61 +34,63 @@ def ingest_document(file_path, subject, chapter, source, version):
 
     documents = loader.load()
 
-    # =========================
-    # Chunking
-    # =========================
-
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=800,
+        chunk_size=600,
         chunk_overlap=120
     )
 
     chunks = splitter.split_documents(documents)
-
-    # =========================
-    # Vector DB Setup
-    # =========================
 
     client = chromadb.PersistentClient(
         path=CHROMA_DIR,
         settings=Settings(anonymized_telemetry=False)
     )
 
-    collection = client.get_or_create_collection(COLLECTION_NAME)
+    collection = client.get_or_create_collection(
+        name=COLLECTION_NAME,
+        metadata={"hnsw:space": "cosine"}
+    )
 
-    # =========================
-    # Embeddings
-    # =========================
+    embedder = OpenAIEmbeddings(
+        model="text-embedding-3-small"
+    )
 
-    embedder = OpenAIEmbeddings()
+    texts = []
 
-    texts = [c.page_content for c in chunks]
+    for c in chunks:
 
-    print("Generating embeddings...")
+        text = f"""
+Subject: {subject}
+Chapter: {chapter}
+Source: {file_name}
+
+{c.page_content}
+"""
+
+        texts.append(text)
 
     embeddings = embedder.embed_documents(texts)
 
-    if not embeddings or len(embeddings) != len(texts):
-        raise RuntimeError("Embeddings generation failed")
+    ids = []
+    metadata = []
 
-    # =========================
-    # Store Vectors
-    # =========================
+    for text in texts:
 
-    print("Storing vectors...")
+        ids.append(f"{chapter}_{uuid.uuid4().hex}")
 
-    for idx, (text, emb) in enumerate(zip(texts, embeddings)):
+        metadata.append({
+            "subject": subject,
+            "chapter": chapter,
+            "source": source,
+            "file": file_name,
+            "version": version
+        })
 
-        collection.add(
-            ids=[f"{chapter}_{version}_{idx}"],
-            documents=[text],
-            embeddings=[emb],
-            metadatas=[{
-                "subject": subject,
-                "chapter": chapter,
-                "source": source,
-                "version": version
-            }]
-        )
+    collection.add(
+        ids=ids,
+        documents=texts,
+        embeddings=embeddings,
+        metadatas=metadata
+    )
 
-    print(f"Stored {len(chunks)} chunks successfully")
+    print(f"Stored {len(texts)} chunks successfully")
