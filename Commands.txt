@@ -1,5 +1,6 @@
 venv\Scripts\activate
 cmd /k venv\Scripts\activate.bat
+uvicorn app:app --reload --port 5000   (TO Start the Back end Server)
 Run exm.py only inside venv
 
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass

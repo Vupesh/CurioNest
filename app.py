@@ -1,61 +1,103 @@
-import traceback
-import sys
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 from engine.rag import ChromaRAGStore
 from engine.agent_v4 import StudentSupportAgentV4
 
 
-def start_backend():
+app = FastAPI()
 
-    print("\nStarting CurioNest Backend\n")
+# Allow React frontend access
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-    try:
+print("\nStarting CurioNest Backend\n")
 
-        rag_store = ChromaRAGStore()
+rag_store = ChromaRAGStore()
+agent = StudentSupportAgentV4(rag_store=rag_store)
 
-        agent = StudentSupportAgentV4(
-            rag_store=rag_store
-        )
-
-        print("Vector DB Loaded")
-        print("Agent Initialized\n")
-
-        return agent
-
-    except Exception:
-
-        print("Backend startup failed\n")
-        traceback.print_exc()
-        sys.exit(1)
+print("Vector DB Loaded")
+print("Agent Initialized\n")
 
 
-if __name__ == "__main__":
+# -------------------------------
+# Request Schema
+# -------------------------------
 
-    agent = start_backend()
+class QuestionRequest(BaseModel):
+    session_id: str
+    domain: str
+    board: str
+    subject: str
+    chapter: str
+    question: str
 
-    context = {
-        "subject": "physics",
-        "chapter": "electricity"
+
+# -------------------------------
+# Health Check
+# -------------------------------
+
+@app.get("/")
+def health():
+    return {"status": "CurioNest backend running"}
+
+
+# -------------------------------
+# Domain Config
+# -------------------------------
+
+@app.get("/domain-config")
+def domain_config():
+
+    return {
+        "education": {
+            "CBSE": {
+                "physics": [
+                    "electricity",
+                    "light_reflection_refraction"
+                ],
+                "chemistry": [
+                    "acids_bases_salts"
+                ],
+                "biology": [
+                    "life_processes"
+                ]
+            },
+            "ICSE": {
+                "physics": [
+                    "force",
+                    "light",
+                    "sound"
+                ]
+            }
+        }
     }
 
-    print("CurioNest CLI Test Mode\n")
 
-    while True:
+# -------------------------------
+# Ask Question Endpoint
+# -------------------------------
 
-        try:
-            question = input("\nAsk Question (or 'exit'): ")
+@app.post("/ask-question")
+def ask_question(req: QuestionRequest):
 
-        except EOFError:
-            break
+    context = {
+        "subject": req.subject,
+        "chapter": req.chapter
+    }
 
-        if question.lower() == "exit":
-            break
+    answer = agent.receive_question(
+        req.question,
+        context,
+        req.session_id
+    )
 
-        answer = agent.receive_question(
-            question,
-            context,
-            session_id="test_session"
-        )
-
-        print("\nAnswer:\n")
-        print(answer)
+    return {
+        "result": answer
+    }
