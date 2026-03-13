@@ -27,6 +27,7 @@ def health():
 
 # ---------------------------------
 # Domain Config
+# (Must match vector DB metadata)
 # ---------------------------------
 
 @app.route("/domain-config", methods=["GET"])
@@ -39,22 +40,22 @@ def domain_config():
 
                 "physics": [
                     "light_reflection_refraction",
-                    "human_eye_colourful_world",
+                    "human_eye",
                     "electricity",
-                    "magnetic_effects_current"
+                    "magnetic_effects_of_current"
                 ],
 
                 "chemistry": [
                     "chemical_reactions_equations",
-                    "acids_bases_salts",
+                    "acid_bases_salts",
                     "metals_non_metals",
-                    "carbon_compounds"
+                    "carbon_and_its_compounds"
                 ],
 
                 "biology": [
                     "life_processes",
-                    "control_coordination",
-                    "organisms_reproduce",
+                    "control_coordinations",
+                    "how_do_organisms_reproduce",
                     "heredity"
                 ]
             },
@@ -73,9 +74,9 @@ def domain_config():
                 "chemistry": [
                     "periodic_properties",
                     "chemical_bonding",
-                    "acids_bases_salts",
+                    "acid_bases_salt",
                     "analytical_chemistry",
-                    "mole_concept",
+                    "mole_concept_stoichiometry",
                     "electrolysis",
                     "metallurgy",
                     "study_of_compounds",
@@ -85,15 +86,16 @@ def domain_config():
                 "biology": [
                     "basic_biology",
                     "plant_physiology",
-                    "human_anatomy",
+                    "human_anatomy_and_physiology",
                     "population",
                     "human_evolution",
-                    "pollution"
+                    "polution"
                 ]
             }
 
         }
     })
+
 
 # ---------------------------------
 # Ask Question
@@ -105,26 +107,55 @@ def ask_question():
     data = request.json
 
     session_id = data.get("session_id", "default")
-    subject = data.get("subject")
-    chapter = data.get("chapter")
-    question = data.get("question")
-    
+    board = data.get("board", "")
+    subject = data.get("subject", "")
+    chapter = data.get("chapter", "")
+    question = data.get("question", "")
+
+    if not question:
+        return jsonify({"result": "No question provided"}), 400
+
+    # -----------------------------
+    # Normalize values
+    # -----------------------------
+
+    board = board.strip().lower()
+    subject = subject.strip().lower()
+    chapter = chapter.strip().lower()
+
+    # -----------------------------
+    # Convert board+subject
+    # to match vector metadata
+    # -----------------------------
+
+    subject_key = f"{board}_{subject}"
+
     context = {
-        "subject": subject,
+        "subject": subject_key,
         "chapter": chapter
     }
 
-    answer = agent.receive_question(
-        question,
-        context,
-        session_id
-    )
+    try:
 
-    return jsonify({
-        "result": answer
-    })
+        answer = agent.receive_question(
+            question=question,
+            context=context,
+            session_id=session_id
+        )
 
-    
+        return jsonify({
+            "result": answer
+        })
+
+    except Exception as e:
+
+        print("ASK QUESTION ERROR:", str(e))
+
+        return jsonify({
+            "result": "Internal server error processing question."
+        })
+
+
 # ---------------------------------
 # Server Start
 # ---------------------------------
