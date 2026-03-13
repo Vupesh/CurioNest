@@ -34,28 +34,66 @@ def domain_config():
 
     return jsonify({
         "education": {
+
             "CBSE": {
+
                 "physics": [
+                    "light_reflection_refraction",
+                    "human_eye_colourful_world",
                     "electricity",
-                    "light_reflection_refraction"
+                    "magnetic_effects_current"
                 ],
+
                 "chemistry": [
-                    "acids_bases_salts"
+                    "chemical_reactions_equations",
+                    "acids_bases_salts",
+                    "metals_non_metals",
+                    "carbon_compounds"
                 ],
+
                 "biology": [
-                    "life_processes"
+                    "life_processes",
+                    "control_coordination",
+                    "organisms_reproduce",
+                    "heredity"
                 ]
             },
+
             "ICSE": {
+
                 "physics": [
                     "force",
+                    "work_power_energy",
                     "light",
-                    "sound"
+                    "sound",
+                    "electricity_magnetism",
+                    "modern_physics"
+                ],
+
+                "chemistry": [
+                    "periodic_properties",
+                    "chemical_bonding",
+                    "acids_bases_salts",
+                    "analytical_chemistry",
+                    "mole_concept",
+                    "electrolysis",
+                    "metallurgy",
+                    "study_of_compounds",
+                    "organic_chemistry"
+                ],
+
+                "biology": [
+                    "basic_biology",
+                    "plant_physiology",
+                    "human_anatomy",
+                    "population",
+                    "human_evolution",
+                    "pollution"
                 ]
             }
+
         }
     })
-
 
 # ---------------------------------
 # Ask Question
@@ -70,7 +108,7 @@ def ask_question():
     subject = data.get("subject")
     chapter = data.get("chapter")
     question = data.get("question")
-
+    
     context = {
         "subject": subject,
         "chapter": chapter
@@ -86,7 +124,7 @@ def ask_question():
         "result": answer
     })
 
-
+    
 # ---------------------------------
 # Server Start
 # ---------------------------------

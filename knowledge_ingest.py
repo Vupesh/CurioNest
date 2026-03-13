@@ -15,11 +15,23 @@ CHROMA_DIR = os.path.join(BASE_DIR, "chroma_db")
 COLLECTION_NAME = "curionest"
 
 
+def normalize(value: str) -> str:
+    """Normalize metadata fields for consistent retrieval"""
+    return value.strip().lower().replace(" ", "_")
+
+
 def ingest_document(file_path, subject, chapter, source, version):
 
     print(f"\nIngesting: {file_path}")
 
     file_name = os.path.basename(file_path)
+
+    # ----------------------------
+    # Normalize metadata
+    # ----------------------------
+
+    subject = normalize(subject)
+    chapter = normalize(chapter)
 
     ext = os.path.splitext(file_path)[1].lower()
 
@@ -34,12 +46,24 @@ def ingest_document(file_path, subject, chapter, source, version):
 
     documents = loader.load()
 
+    # ----------------------------
+    # Chunking
+    # ----------------------------
+
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=600,
         chunk_overlap=120
     )
 
     chunks = splitter.split_documents(documents)
+
+    if not chunks:
+        print("No chunks created — skipping file")
+        return
+
+    # ----------------------------
+    # Vector DB connection
+    # ----------------------------
 
     client = chromadb.PersistentClient(
         path=CHROMA_DIR,
@@ -50,6 +74,10 @@ def ingest_document(file_path, subject, chapter, source, version):
         name=COLLECTION_NAME,
         metadata={"hnsw:space": "cosine"}
     )
+
+    # ----------------------------
+    # Embeddings
+    # ----------------------------
 
     embedder = OpenAIEmbeddings(
         model="text-embedding-3-small"
@@ -67,9 +95,13 @@ Source: {file_name}
 {c.page_content}
 """
 
-        texts.append(text)
+        texts.append(text.strip())
 
     embeddings = embedder.embed_documents(texts)
+
+    # ----------------------------
+    # Metadata creation
+    # ----------------------------
 
     ids = []
     metadata = []
@@ -85,6 +117,10 @@ Source: {file_name}
             "file": file_name,
             "version": version
         })
+
+    # ----------------------------
+    # Store vectors
+    # ----------------------------
 
     collection.add(
         ids=ids,
