@@ -1,9 +1,12 @@
 import os
 from openai import OpenAI
+
 from services.logging_service import LoggingService
 from services.email_service import EmailService
+
 from engine.lead_persistence import LeadPersistenceService
 from engine.economics_engine import EscalationEconomicsEngine
+
 from budget_guard import check_and_update
 
 
@@ -22,10 +25,8 @@ class StudentSupportAgentV4:
 
         self.email_service = EmailService()
 
-        # PostgreSQL Lead Persistence
         self.lead_persistence = LeadPersistenceService()
 
-        # Block 13
         self.economics_engine = EscalationEconomicsEngine()
 
     # ==================================================
@@ -45,6 +46,7 @@ class StudentSupportAgentV4:
         try:
             identified = self.identify_context(question, context)
         except Exception:
+
             return self.escalate(
                 question,
                 None,
@@ -77,6 +79,7 @@ class StudentSupportAgentV4:
 
         try:
             decision = self.decide_action(identified)
+
         except Exception:
 
             return self.escalate(
@@ -146,7 +149,7 @@ class StudentSupportAgentV4:
         return intent, strength
 
     # ==================================================
-    # CONTEXT
+    # CONTEXT IDENTIFICATION
     # ==================================================
 
     def identify_context(self, question, context):
@@ -190,21 +193,14 @@ class StudentSupportAgentV4:
             identified["chapter"]
         )
 
+        # =============================
+        # NO SYLLABUS CONTENT
+        # =============================
+
         if not chunks:
 
-            if intent_strength >= 2:
-
-                return self.escalate(
-                    question,
-                    identified["subject"],
-                    identified["chapter"],
-                    "No reliable syllabus content found",
-                    "ESC_NO_VECTORS",
-                    session_id,
-                    intent_strength
-                )
-
-            return "I could not find exact syllabus content. Could you clarify your question?"
+            # Curiosity mode for engagement
+            return self.curiosity_response(question, identified)
 
         if len(chunks) < 2:
 
@@ -220,12 +216,12 @@ class StudentSupportAgentV4:
                     intent_strength
                 )
 
-            return "I found limited syllabus information. Could you clarify?"
+            return "I found limited syllabus information. Could you clarify your question?"
 
         return self.explain_with_ai(question, chunks, session_id, intent_strength)
 
     # ==================================================
-    # AI EXPLANATION ENGINE
+    # SYLLABUS ANSWER
     # ==================================================
 
     def explain_with_ai(self, question, chunks, session_id, intent_strength):
@@ -246,12 +242,10 @@ class StudentSupportAgentV4:
                 intent_strength
             )
 
-        try:
+        prompt = f"""
+You are a friendly tutor helping a student understand concepts from their syllabus.
 
-            prompt = f"""
-You are a friendly and supportive tutor helping a student understand concepts from their syllabus.
-
-Use ONLY the syllabus content below.
+Use ONLY the syllabus context provided.
 
 Context:
 {content}
@@ -259,54 +253,31 @@ Context:
 Student Question:
 {question}
 
-Answer using this format:
+Answer format:
 
 1. Concept Explanation
-Explain the concept clearly in simple language.
-
 2. Key Formula (if relevant)
-Show the formula and explain the variables.
-
 3. Example
-Provide a small example to make the idea easier.
 
 Rules:
-- Stay strictly within the provided context.
-- Do not invent information outside the syllabus.
-- Use a friendly tone suitable for students.
-
-End with a short encouraging follow-up question.
-Example:
-"Would you like to see a quick example?"
+- Stay strictly within syllabus content
+- Use simple student-friendly language
+- End with a short encouraging question
 """
 
-            response = self.client.chat.completions.create(
+        response = self.client.chat.completions.create(
 
-                model="gpt-4o-mini",
+            model="gpt-4o-mini",
 
-                max_tokens=350,
+            max_tokens=350,
 
-                messages=[
-                    {"role": "system", "content": "You are a helpful academic tutor."},
-                    {"role": "user", "content": prompt}
-                ],
+            messages=[
+                {"role": "system", "content": "You are a helpful academic tutor."},
+                {"role": "user", "content": prompt}
+            ],
 
-                temperature=0.2,
-
-                timeout=8
-            )
-
-        except Exception:
-
-            return self.escalate(
-                question,
-                None,
-                None,
-                "AI provider failure",
-                "ESC_AI_TIMEOUT",
-                session_id,
-                intent_strength
-            )
+            temperature=0.2
+        )
 
         answer = response.choices[0].message.content.strip()
 
@@ -317,7 +288,46 @@ Example:
         return answer
 
     # ==================================================
-    # ESCALATION
+    # CURIOSITY MODE
+    # ==================================================
+
+    def curiosity_response(self, question, identified):
+
+        prompt = f"""
+The student asked: "{question}"
+
+This topic is outside the syllabus.
+
+Explain the concept briefly in MAX 2 short paragraphs.
+
+Then politely redirect the student back to the syllabus topic:
+
+Subject: {identified["subject"]}
+Chapter: {identified["chapter"]}
+
+Structure:
+1. Short explanation
+2. Redirect to syllabus
+"""
+
+        response = self.client.chat.completions.create(
+
+            model="gpt-4o-mini",
+
+            max_tokens=120,
+
+            messages=[
+                {"role": "system", "content": "You are a helpful academic tutor."},
+                {"role": "user", "content": prompt}
+            ],
+
+            temperature=0.2
+        )
+
+        return response.choices[0].message.content.strip()
+
+    # ==================================================
+    # ESCALATION ENGINE
     # ==================================================
 
     def escalate(self, question, subject, chapter, reason, code, session_id, intent_strength=0):
@@ -346,25 +356,9 @@ Example:
 
         if not self.economics_engine.escalation_budget_available():
 
-            self.logger.log("ESCALATION_BLOCKED_BUDGET", {
-                "session_id": session_id,
-                "lead_score": lead_score
-            })
-
             return "Escalation capacity is currently limited. Please try again shortly."
 
         self.economics_engine.register_escalation()
-
-        self.logger.log("ESCALATION_TRIGGERED", {
-            "session_id": session_id,
-            "code": code,
-            "reason": reason,
-            "engagement_score": engagement_score,
-            "intent_strength": intent_strength,
-            "escalation_confidence": escalation_confidence,
-            "lead_quality_score": lead_score,
-            "priority": priority
-        })
 
         lead_id = self.lead_persistence.upsert_lead(
             session_id=session_id,
@@ -390,7 +384,6 @@ Subject: {subject}
 Chapter: {chapter}
 
 Reason: {reason}
-
 Confidence: {escalation_confidence}
 Engagement Score: {engagement_score}
 Intent Strength: {intent_strength}
