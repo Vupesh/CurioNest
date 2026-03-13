@@ -1,21 +1,11 @@
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from flask import Flask, request, jsonify
+from flask_cors import CORS
 
 from engine.rag import ChromaRAGStore
 from engine.agent_v4 import StudentSupportAgentV4
 
-
-app = FastAPI()
-
-# Allow React frontend access
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app = Flask(__name__)
+CORS(app)
 
 print("\nStarting CurioNest Backend\n")
 
@@ -26,36 +16,23 @@ print("Vector DB Loaded")
 print("Agent Initialized\n")
 
 
-# -------------------------------
-# Request Schema
-# -------------------------------
-
-class QuestionRequest(BaseModel):
-    session_id: str
-    domain: str
-    board: str
-    subject: str
-    chapter: str
-    question: str
-
-
-# -------------------------------
+# ---------------------------------
 # Health Check
-# -------------------------------
+# ---------------------------------
 
-@app.get("/")
+@app.route("/", methods=["GET"])
 def health():
-    return {"status": "CurioNest backend running"}
+    return jsonify({"status": "CurioNest backend running"})
 
 
-# -------------------------------
+# ---------------------------------
 # Domain Config
-# -------------------------------
+# ---------------------------------
 
-@app.get("/domain-config")
+@app.route("/domain-config", methods=["GET"])
 def domain_config():
 
-    return {
+    return jsonify({
         "education": {
             "CBSE": {
                 "physics": [
@@ -77,27 +54,47 @@ def domain_config():
                 ]
             }
         }
-    }
+    })
 
 
-# -------------------------------
-# Ask Question Endpoint
-# -------------------------------
+# ---------------------------------
+# Ask Question
+# ---------------------------------
 
-@app.post("/ask-question")
-def ask_question(req: QuestionRequest):
+@app.route("/ask-question", methods=["POST"])
+def ask_question():
+
+    data = request.json
+
+    session_id = data.get("session_id", "default")
+    subject = data.get("subject")
+    chapter = data.get("chapter")
+    question = data.get("question")
 
     context = {
-        "subject": req.subject,
-        "chapter": req.chapter
+        "subject": subject,
+        "chapter": chapter
     }
 
     answer = agent.receive_question(
-        req.question,
+        question,
         context,
-        req.session_id
+        session_id
     )
 
-    return {
+    return jsonify({
         "result": answer
-    }
+    })
+
+
+# ---------------------------------
+# Server Start
+# ---------------------------------
+
+if __name__ == "__main__":
+
+    app.run(
+        host="0.0.0.0",
+        port=5000,
+        debug=True
+    )
