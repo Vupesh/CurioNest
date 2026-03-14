@@ -43,6 +43,7 @@ class StudentSupportAgentV4:
 
         try:
             identified = self.identify_context(question, context)
+
         except Exception:
 
             return self.escalate(
@@ -76,6 +77,7 @@ class StudentSupportAgentV4:
             )
 
         try:
+
             decision = self.decide_action(identified)
 
         except Exception:
@@ -192,7 +194,6 @@ class StudentSupportAgentV4:
         )
 
         if not chunks:
-
             return self.curiosity_response(question, identified)
 
         if len(chunks) < 2:
@@ -256,14 +257,35 @@ Rules:
 - Stay strictly within syllabus content
 - Use simple student-friendly language
 - End with a short encouraging question
-- When writing formulas ALWAYS use LaTeX
-- Wrap formulas using: \\[ ... \\]
 
-Example:
+FORMULA RULES:
+
+When writing ANY mathematical OR chemical formula:
+
+• ALWAYS use LaTeX formatting
+• Wrap formulas using block math:
+
+\\[ ... \\]
+
+Examples:
+
+Physics:
 
 \\[
 F = \\frac{{G m_1 m_2}}{{r^2}}
 \\]
+
+Chemistry:
+
+\\[
+NH_4^+
+\\]
+
+\\[
+NH_4Cl_{{(s)}} \\rightarrow NH_3_{{(g)}} + HCl_{{(g)}}
+\\]
+
+Never write formulas as plain text.
 """
 
         response = self.client.chat.completions.create(
@@ -350,14 +372,7 @@ Chapter: {identified["chapter"]}
             code
         )
 
-        lead_score = self.economics_engine.compute_lead_quality_score(
-            escalation_confidence,
-            engagement_score,
-            intent_strength
-        )
-
         if not self.economics_engine.escalation_budget_available():
-
             return "Escalation capacity is currently limited."
 
         self.economics_engine.register_escalation()
@@ -375,7 +390,6 @@ Chapter: {identified["chapter"]}
             status="QUALIFIED" if escalation_confidence >= 40 else "NEW"
         )
 
-        # CRITICAL: stable response for frontend
         return f"ESCALATE TO SME: {reason}"
 
     # ==================================================
@@ -401,3 +415,4 @@ Chapter: {identified["chapter"]}
             return "advanced"
 
         return "basic"
+    
