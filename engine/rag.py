@@ -28,6 +28,7 @@ class ChromaRAGStore:
 
         self.logger = LoggingService()
 
+        # OpenAI embedding model
         self.embedder = OpenAIEmbeddings(
             model="text-embedding-3-small"
         )
@@ -48,6 +49,7 @@ class ChromaRAGStore:
 
             query_embedding = self.embedder.embed_query(query)
 
+            # Metadata filter
             where_filter = {"subject": subject}
 
             if chapter:
@@ -81,15 +83,17 @@ class ChromaRAGStore:
         docs = documents[0]
         dists = distances[0]
 
-        # Remove weak matches
-        filtered_docs = []
+        # ================= FILTER LOW QUALITY =================
+
+        filtered = []
 
         for doc, dist in zip(docs, dists):
 
-            if dist < 1.2:
-                filtered_docs.append(doc)
+            # Distance threshold tuned for OpenAI embeddings
+            if dist < 1.1:
+                filtered.append((doc, dist))
 
-        if not filtered_docs:
+        if not filtered:
 
             self.logger.log("RAG_LOW_SIMILARITY", {
                 "query": query[:80],
@@ -99,14 +103,20 @@ class ChromaRAGStore:
 
             return []
 
+        # ================= SORT BY BEST MATCH =================
+
+        filtered.sort(key=lambda x: x[1])
+
+        final_docs = [doc for doc, _ in filtered]
+
         self.logger.log("RAG_SUCCESS", {
             "query": query[:80],
             "subject": subject,
             "chapter": chapter,
-            "chunks": len(filtered_docs)
+            "chunks": len(final_docs)
         })
 
-        return filtered_docs
+        return final_docs
 
     # ================= VALIDATION =================
 
