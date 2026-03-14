@@ -236,7 +236,7 @@ class StudentSupportAgentV4:
                 intent_strength
             )
 
-        prompt = """
+        prompt = f"""
 You are a friendly tutor helping a student understand concepts from their syllabus.
 
 Use ONLY the syllabus context provided.
@@ -280,7 +280,12 @@ NH_4^+
 NH_4OH \\rightarrow NH_3 + H_2O
 \\]
 
-IMPORTANT:
+IMPORTANT RULES:
+
+• Use LaTeX ONLY for formulas.
+• Do NOT place sentences inside LaTeX blocks.
+• Do NOT attempt to draw molecular structures using LaTeX.
+• Write explanations in normal text.
 
 Do NOT use inline math:
 
@@ -289,7 +294,7 @@ Do NOT use inline math:
 Only use block math:
 
 \\[ ... \\]
-""".format(content=content, question=question)
+"""
 
         response = self.client.chat.completions.create(
 
