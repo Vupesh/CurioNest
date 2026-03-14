@@ -263,7 +263,19 @@ Rules:
 - Stay strictly within syllabus content
 - Use simple student-friendly language
 - End with a short encouraging question
-"""
+- When writing any formula ALWAYS use LaTeX format.
+- Wrap formulas in block math using: \[ ... \]
+- Do NOT write formulas as plain text.
+- Do NOT use \( ... \).
+- Only use \[ ... \] for formulas.
+
+Example:
+
+2. Key Formula
+
+\[ F = \frac{{G m_1 m_2}}{{r^2}} \]
+
+Explain what each variable represents."""
 
         response = self.client.chat.completions.create(
 
