@@ -1,34 +1,49 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+import traceback
 
 from engine.rag import ChromaRAGStore
-from engine.agent_v4 import StudentSupportAgentV4
+from engine.agent_v4 import StudentSupportAgentV5
+from services.logging_service import LoggingService
+
+
+# =============================
+# APP INIT
+# =============================
 
 app = Flask(__name__)
 CORS(app)
 
+logger = LoggingService()
+
 print("\nStarting CurioNest Backend\n")
 
+
+# =============================
+# LOAD RAG + AGENT
+# =============================
+
 rag_store = ChromaRAGStore()
-agent = StudentSupportAgentV4(rag_store=rag_store)
+agent = StudentSupportAgentV5(rag_store=rag_store)
 
 print("Vector DB Loaded")
-print("Agent Initialized\n")
+print("Agent V5 Initialized\n")
 
 
-# ---------------------------------
-# Health Check
-# ---------------------------------
+# =============================
+# HEALTH CHECK
+# =============================
 
 @app.route("/", methods=["GET"])
 def health():
-    return jsonify({"status": "CurioNest backend running"})
+    return jsonify({
+        "status": "CurioNest backend running"
+    })
 
 
-# ---------------------------------
-# Domain Config
-# (Must match vector DB metadata)
-# ---------------------------------
+# =============================
+# DOMAIN CONFIG
+# =============================
 
 @app.route("/domain-config", methods=["GET"])
 def domain_config():
@@ -97,45 +112,54 @@ def domain_config():
     })
 
 
-# ---------------------------------
-# Ask Question
-# ---------------------------------
+# =============================
+# ASK QUESTION API
+# =============================
 
 @app.route("/ask-question", methods=["POST"])
 def ask_question():
 
-    data = request.json
-
-    session_id = data.get("session_id", "default")
-    board = data.get("board", "")
-    subject = data.get("subject", "")
-    chapter = data.get("chapter", "")
-    question = data.get("question", "")
-
-    if not question:
-        return jsonify({"result": "No question provided"}), 400
-
-    # -----------------------------
-    # Normalize values
-    # -----------------------------
-
-    board = board.strip().lower()
-    subject = subject.strip().lower()
-    chapter = chapter.strip().lower()
-
-    # -----------------------------
-    # Convert board+subject
-    # to match vector metadata
-    # -----------------------------
-
-    subject_key = f"{board}_{subject}"
-
-    context = {
-        "subject": subject_key,
-        "chapter": chapter
-    }
-
     try:
+
+        data = request.get_json()
+
+        if not data:
+            return jsonify({"result": "Invalid request"}), 400
+
+        session_id = data.get("session_id", "default")
+        board = data.get("board", "")
+        subject = data.get("subject", "")
+        chapter = data.get("chapter", "")
+        question = data.get("question", "")
+
+        if not question:
+            return jsonify({"result": "No question provided"}), 400
+
+        # -------------------------
+        # Normalize
+        # -------------------------
+
+        board = board.strip().lower()
+        subject = subject.strip().lower()
+        chapter = chapter.strip().lower()
+
+        subject_key = f"{board}_{subject}"
+
+        context = {
+            "subject": subject_key,
+            "chapter": chapter
+        }
+
+        logger.log("QUESTION_RECEIVED", {
+            "session_id": session_id,
+            "subject": subject_key,
+            "chapter": chapter,
+            "question": question[:100]
+        })
+
+        # -------------------------
+        # AI Agent
+        # -------------------------
 
         answer = agent.receive_question(
             question=question,
@@ -149,16 +173,19 @@ def ask_question():
 
     except Exception as e:
 
-        print("ASK QUESTION ERROR:", str(e))
+        print("\nASK QUESTION ERROR\n")
+        traceback.print_exc()
+
+        logger.log("ASK_QUESTION_ERROR", str(e))
 
         return jsonify({
             "result": "Internal server error processing question."
         })
 
 
-# ---------------------------------
-# Server Start
-# ---------------------------------
+# =============================
+# SERVER START
+# =============================
 
 if __name__ == "__main__":
 

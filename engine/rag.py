@@ -48,11 +48,15 @@ class ChromaRAGStore:
 
             query_embedding = self.embedder.embed_query(query)
 
-            # Production-safe filtering
+            where_filter = {"subject": subject}
+
+            if chapter:
+                where_filter["chapter"] = chapter
+
             res = self.collection.query(
                 query_embeddings=[query_embedding],
                 n_results=k,
-                where={"subject": subject},
+                where=where_filter,
                 include=["documents", "distances"]
             )
 
@@ -75,15 +79,34 @@ class ChromaRAGStore:
             return []
 
         docs = documents[0]
+        dists = distances[0]
+
+        # Remove weak matches
+        filtered_docs = []
+
+        for doc, dist in zip(docs, dists):
+
+            if dist < 1.2:
+                filtered_docs.append(doc)
+
+        if not filtered_docs:
+
+            self.logger.log("RAG_LOW_SIMILARITY", {
+                "query": query[:80],
+                "subject": subject,
+                "chapter": chapter
+            })
+
+            return []
 
         self.logger.log("RAG_SUCCESS", {
             "query": query[:80],
             "subject": subject,
             "chapter": chapter,
-            "chunks": len(docs)
+            "chunks": len(filtered_docs)
         })
 
-        return docs
+        return filtered_docs
 
     # ================= VALIDATION =================
 

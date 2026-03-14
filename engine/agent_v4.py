@@ -15,32 +15,31 @@ from budget_guard import check_and_update
 # LATEX NORMALIZER
 # ==============================
 
-def normalize_latex(text: str) -> str:
-    """
-    Normalize math formatting so KaTeX always renders correctly.
-    """
+def normalize_latex(text: str):
 
     if not text:
         return text
 
-    # Convert inline math \( ... \) → block math
     text = re.sub(r"\\\((.*?)\\\)", r"\\[\1\\]", text)
-
-    # Fix accidental \C_7H_8\
     text = re.sub(r"\\([A-Za-z0-9_+\-\^=]+)\\", r"\\[\1\\]", text)
-
-    # Remove vertical broken text blocks
     text = re.sub(r"(?:\b[a-zA-Z]\n){3,}", "", text)
 
     return text
 
 
-class StudentSupportAgentV4:
+# ==============================
+# AGENT V5
+# ==============================
+
+class StudentSupportAgentV5:
 
     def __init__(self, rag_store, session_engine=None, ux_engine=None, lead_engine=None):
 
         self.rag_store = rag_store
-        self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+        self.client = OpenAI(
+            api_key=os.getenv("OPENAI_API_KEY")
+        )
 
         self.logger = LoggingService()
 
@@ -58,28 +57,15 @@ class StudentSupportAgentV4:
 
     def receive_question(self, question, context, session_id="default"):
 
-        intent, intent_strength = self.classify_intent(question)
+        intent, intent_conf = self.classify_intent_ai(question)
 
-        self.logger.log("INTENT_ANALYSIS", {
+        self.logger.log("INTENT_ANALYSIS_V5", {
             "session_id": session_id,
             "intent": intent,
-            "intent_strength": intent_strength
+            "confidence": intent_conf
         })
 
-        try:
-            identified = self.identify_context(question, context)
-
-        except Exception:
-
-            return self.escalate(
-                question,
-                None,
-                None,
-                "Context identification failure",
-                "ESC_CONTEXT_ERROR",
-                session_id,
-                intent_strength
-            )
+        identified = self.identify_context(question, context)
 
         if self.session_engine:
 
@@ -89,12 +75,24 @@ class StudentSupportAgentV4:
                 identified.get("difficulty")
             )
 
-        decision = self.decide_action(identified)
+        decision = self.decide_action(
+            question,
+            identified,
+            intent,
+            intent_conf,
+            session_id
+        )
 
         if decision == "RESPOND":
 
             try:
-                return self.respond(question, identified, session_id, intent_strength)
+
+                return self.respond(
+                    question,
+                    identified,
+                    session_id,
+                    intent_conf
+                )
 
             except Exception:
 
@@ -105,50 +103,73 @@ class StudentSupportAgentV4:
                     "Response generation failure",
                     "ESC_RESPONSE_FAILURE",
                     session_id,
-                    intent_strength
+                    intent_conf
                 )
 
         return self.escalate(
             question,
             identified.get("subject"),
             identified.get("chapter"),
-            identified.get("escalation_reason", "Unknown reason"),
-            identified.get("escalation_code", "ESC_UNKNOWN"),
+            "Student likely needs teacher assistance",
+            "ESC_LEARNING_SUPPORT",
             session_id,
-            intent_strength
+            intent_conf
         )
 
     # ==================================================
-    # INTENT DETECTION
+    # AI INTENT CLASSIFIER
     # ==================================================
 
-    def classify_intent(self, question):
+    def classify_intent_ai(self, question):
 
-        q = question.lower()
+        prompt = f"""
+Classify the student's learning intent.
 
-        intent = "KNOWLEDGE_QUERY"
-        strength = 0
+Question:
+{question}
 
-        if any(k in q for k in ["prove", "derive", "theorem"]):
-            intent = "ADVANCED_ACADEMIC"
-            strength += 2
+Possible intents:
+- BASIC_CONCEPT
+- ADVANCED_TOPIC
+- CONFUSED_STUDENT
+- DIRECT_HELP_REQUEST
+- EXAM_URGENCY
 
-        if any(k in q for k in ["teacher", "tutor", "extra class", "need help"]):
-            intent = "DIRECT_HELP_REQUEST"
-            strength += 4
+Return JSON:
+{{"intent":"...", "confidence":0.0-1.0}}
+"""
 
-        if any(k in q for k in ["confused", "stuck", "not understanding"]):
-            intent = "FRUSTRATION_SIGNAL"
-            strength += 3
+        try:
 
-        if any(k in q for k in ["urgent", "exam tomorrow", "asap"]):
-            intent = "HIGH_URGENCY"
-            strength += 3
+            res = self.client.chat.completions.create(
+                model="gpt-4o-mini",
+                max_tokens=60,
+                temperature=0,
+                messages=[
+                    {"role": "system", "content": "You analyze student questions."},
+                    {"role": "user", "content": prompt}
+                ]
+            )
 
-        return intent, strength
+            text = res.choices[0].message.content
+
+            if "ADVANCED_TOPIC" in text:
+                return "ADVANCED_TOPIC", 0.8
+
+            if "CONFUSED_STUDENT" in text:
+                return "CONFUSED_STUDENT", 0.7
+
+            if "DIRECT_HELP_REQUEST" in text:
+                return "DIRECT_HELP_REQUEST", 0.9
+
+            return "BASIC_CONCEPT", 0.5
+
+        except Exception:
+
+            return "KNOWLEDGE_QUERY", 0.4
 
     # ==================================================
-    # CONTEXT
+    # CONTEXT IDENTIFICATION
     # ==================================================
 
     def identify_context(self, question, context):
@@ -169,13 +190,33 @@ class StudentSupportAgentV4:
     # DECISION ENGINE
     # ==================================================
 
-    def decide_action(self, identified):
+    def decide_action(self, question, identified, intent, intent_conf, session_id):
+
+        escalation_score = 0
+
+        if intent == "ADVANCED_TOPIC":
+            escalation_score += 8
+
+        if intent == "DIRECT_HELP_REQUEST":
+            escalation_score += 10
+
+        if intent == "CONFUSED_STUDENT":
+            escalation_score += 6
+
+        if self.session_engine:
+
+            engagement = self.session_engine.calculate_engagement_score(session_id)
+            escalation_score += engagement * 2
 
         if identified["difficulty"] == "advanced":
+            escalation_score += 5
 
-            identified["escalation_reason"] = "Advanced question requires teacher"
-            identified["escalation_code"] = "ESC_ADVANCED_TOPIC"
+        self.logger.log("ESCALATION_SCORE", {
+            "score": escalation_score,
+            "intent": intent
+        })
 
+        if escalation_score >= 12:
             return "ESCALATE"
 
         return "RESPOND"
@@ -184,7 +225,7 @@ class StudentSupportAgentV4:
     # RESPONSE ENGINE
     # ==================================================
 
-    def respond(self, question, identified, session_id, intent_strength):
+    def respond(self, question, identified, session_id, intent_conf):
 
         chunks = self.rag_store.search(
             question,
@@ -197,27 +238,27 @@ class StudentSupportAgentV4:
 
         if len(chunks) < 2:
 
-            if intent_strength >= 3:
+            if intent_conf >= 0.7:
 
                 return self.escalate(
                     question,
                     identified["subject"],
                     identified["chapter"],
-                    "Student likely needs teacher assistance",
+                    "Low syllabus coverage",
                     "ESC_LOW_CONFIDENCE",
                     session_id,
-                    intent_strength
+                    intent_conf
                 )
 
             return "I found limited syllabus information. Could you clarify your question?"
 
-        return self.explain_with_ai(question, chunks, session_id, intent_strength)
+        return self.explain_with_ai(question, chunks, session_id)
 
     # ==================================================
-    # SYLLABUS ANSWER
+    # AI TUTOR
     # ==================================================
 
-    def explain_with_ai(self, question, chunks, session_id, intent_strength):
+    def explain_with_ai(self, question, chunks, session_id):
 
         content = "\n\n".join(chunks)
 
@@ -231,53 +272,32 @@ class StudentSupportAgentV4:
                 None,
                 reason,
                 "ESC_BUDGET_BLOCK",
-                session_id,
-                intent_strength
+                session_id
             )
 
-        prompt = """
-You are a friendly tutor helping a student understand concepts from their syllabus.
+        prompt = f"""
+You are a friendly tutor helping a student.
 
-Use ONLY the syllabus context provided.
+Use ONLY this syllabus context.
 
 Context:
 {content}
 
-Student Question:
+Question:
 {question}
 
-Answer format:
+Answer structure:
 
 1. Concept Explanation
-2. Key Formula (if relevant)
-3. Example
+2. Formula if needed
+3. Simple Example
 
-FORMULA RULES:
-
-Use LaTeX only for formulas.
-
-Wrap formulas using block math:
-
-\\[ ... \\]
-
-Example physics formula:
+Use LaTeX for formulas:
 
 \\[
-F = \\frac{{G m_1 m_2}}{{r^2}}
+F = ma
 \\]
-
-Example chemistry equation:
-
-\\[
-NH_4OH \\rightarrow NH_3 + H_2O
-\\]
-
-Important rules:
-
-• Use LaTeX only for formulas.
-• Never place sentences inside formulas.
-• Write explanations outside LaTeX blocks.
-""".format(content=content, question=question)
+"""
 
         response = self.client.chat.completions.create(
 
@@ -285,26 +305,26 @@ Important rules:
 
             max_tokens=350,
 
-            messages=[
-                {"role": "system", "content": "You are a helpful academic tutor."},
-                {"role": "user", "content": prompt}
-            ],
+            temperature=0.2,
 
-            temperature=0.2
+            messages=[
+                {"role": "system", "content": "You are an academic tutor."},
+                {"role": "user", "content": prompt}
+            ]
         )
 
         answer = response.choices[0].message.content.strip()
 
         answer = normalize_latex(answer)
 
-        self.logger.log("AI_RESPONSE_GENERATED", {
+        self.logger.log("AI_RESPONSE_GENERATED_V5", {
             "session_id": session_id
         })
 
         return answer
 
     # ==================================================
-    # CURIOSITY MODE
+    # CURIOSITY RESPONSE
     # ==================================================
 
     def curiosity_response(self, question, identified):
@@ -315,33 +335,35 @@ Important rules:
             return "Let's stay focused on your syllabus topic."
 
         prompt = f"""
-The student asked: "{question}"
+The student asked:
+
+{question}
 
 This topic is outside the syllabus.
 
-Explain briefly in maximum two short paragraphs.
+Explain briefly in two short paragraphs.
 
-Then redirect the student back to:
+Then redirect to:
 
 Subject: {identified["subject"]}
 Chapter: {identified["chapter"]}
 """
 
-        response = self.client.chat.completions.create(
+        res = self.client.chat.completions.create(
 
             model="gpt-4o-mini",
 
             max_tokens=120,
 
+            temperature=0.2,
+
             messages=[
                 {"role": "system", "content": "You are a helpful academic tutor."},
                 {"role": "user", "content": prompt}
-            ],
-
-            temperature=0.2
+            ]
         )
 
-        answer = response.choices[0].message.content.strip()
+        answer = res.choices[0].message.content.strip()
 
         return normalize_latex(answer)
 
@@ -386,7 +408,7 @@ Chapter: {identified["chapter"]}
         return f"ESCALATE TO SME: {reason}"
 
     # ==================================================
-    # CONFIDENCE
+    # CONFIDENCE SCORE
     # ==================================================
 
     def compute_escalation_confidence(self, engagement_score, intent_strength, escalation_code=None):
@@ -399,12 +421,22 @@ Chapter: {identified["chapter"]}
         return max(0, min(score, 100))
 
     # ==================================================
-    # DIFFICULTY
+    # DIFFICULTY DETECTION
     # ==================================================
 
     def detect_difficulty(self, question):
 
-        if any(k in question.lower() for k in ["prove", "derive", "theorem"]):
+        q = question.lower()
+
+        if any(k in q for k in [
+            "prove",
+            "derive",
+            "theorem",
+            "resonance",
+            "quantum",
+            "orbital",
+            "calculus"
+        ]):
             return "advanced"
 
         return "basic"
