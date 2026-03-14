@@ -20,16 +20,12 @@ function getSessionId() {
 }
 
 /* -----------------------------
-Math Renderer (Production Ready)
-Supports:
-[ ... ]   → block math
-( ... )   → inline math
+Math Renderer
 ----------------------------- */
 function renderMath(text) {
   if (!text) return null;
 
   const parts = [];
-  // Corrected regex: escaped [ for block math, captures block in $1, inline in $2
   const regex = /\[(.*?)\]|\((.*?)\)/g;
 
   let lastIndex = 0;
@@ -37,7 +33,6 @@ function renderMath(text) {
   let key = 0;
 
   while ((match = regex.exec(text)) !== null) {
-    // Push preceding plain text
     if (match.index > lastIndex) {
       parts.push(
         <span key={key++}>
@@ -46,23 +41,15 @@ function renderMath(text) {
       );
     }
 
-    // Block math (captured in match[1])
     if (match[1]) {
-      parts.push(
-        <BlockMath key={key++} math={match[1]} />
-      );
-    }
-    // Inline math (captured in match[2])
-    else if (match[2]) {
-      parts.push(
-        <InlineMath key={key++} math={match[2]} />
-      );
+      parts.push(<BlockMath key={key++} math={match[1]} />);
+    } else if (match[2]) {
+      parts.push(<InlineMath key={key++} math={match[2]} />);
     }
 
     lastIndex = regex.lastIndex;
   }
 
-  // Push remaining plain text
   if (lastIndex < text.length) {
     parts.push(
       <span key={key++}>
@@ -79,12 +66,19 @@ MAIN APP
 ============================= */
 function App() {
   const [config, setConfig] = useState(null);
+
   const [board, setBoard] = useState("");
   const [subject, setSubject] = useState("");
   const [chapter, setChapter] = useState("");
+
   const [question, setQuestion] = useState("");
   const [response, setResponse] = useState("");
+
   const [loading, setLoading] = useState(false);
+
+  /* NEW: escalation UI state */
+  const [showEscalation, setShowEscalation] = useState(false);
+  const [escalationMessage, setEscalationMessage] = useState("");
 
   /* -----------------------------
   Dropdown values
@@ -119,9 +113,12 @@ function App() {
         setBoard(firstBoard);
         setSubject(firstSubject);
         setChapter(firstChapter);
+
       } catch (err) {
+
         console.error("Domain config failed", err);
         setResponse("System initialization failed. Please refresh.");
+
       }
     }
 
@@ -132,6 +129,7 @@ function App() {
   Board Change
   ----------------------------- */
   function handleBoardChange(e) {
+
     const newBoard = e.target.value;
     setBoard(newBoard);
 
@@ -142,30 +140,36 @@ function App() {
 
     const firstChapter = config.education[newBoard][firstSubject][0];
     setChapter(firstChapter);
+
   }
 
   /* -----------------------------
   Subject Change
   ----------------------------- */
   function handleSubjectChange(e) {
+
     const newSubject = e.target.value;
     setSubject(newSubject);
 
     const firstChapter = config.education[board][newSubject][0];
     setChapter(firstChapter);
+
   }
 
   /* -----------------------------
   Chapter Change
   ----------------------------- */
   function handleChapterChange(e) {
+
     setChapter(e.target.value);
+
   }
 
   /* -----------------------------
   Ask Question
   ----------------------------- */
   async function askQuestion() {
+
     if (!question.trim()) {
       setResponse("Please enter a question.");
       return;
@@ -178,31 +182,54 @@ function App() {
 
     setLoading(true);
     setResponse("");
+    setShowEscalation(false);
 
     try {
+
       const res = await axios.post(`${API_BASE}/ask-question`, {
+
         session_id: getSessionId(),
         domain: "education",
         board,
         subject,
         chapter,
         question
+
       });
 
-      setResponse(res.data.result);
+      const result = res.data.result;
+
+      /* Detect escalation */
+      if (result && result.startsWith("ESCALATE")) {
+
+        setShowEscalation(true);
+        setEscalationMessage(result);
+        setResponse("");
+
+      } else {
+
+        setResponse(result);
+
+      }
+
     } catch (err) {
+
       console.error("API error:", err);
       setResponse("The system is temporarily unavailable.");
+
     }
 
     setLoading(false);
+
   }
 
   /* -----------------------------
   UI
   ----------------------------- */
   return (
+
     <div style={{ padding: 40, fontFamily: "Arial", maxWidth: 700 }}>
+
       <h2>CurioNest</h2>
 
       <label><b>Board</b></label><br />
@@ -246,16 +273,52 @@ function App() {
         {loading ? "Processing..." : "Ask"}
       </button>
 
-      <div
-        style={{
-          padding: 14,
-          border: "1px solid #ccc",
-          marginTop: 20,
-          lineHeight: "1.6"
-        }}
-      >
-        {renderMath(response)}
-      </div>
+      {/* NORMAL RESPONSE */}
+
+      {!showEscalation && (
+        <div
+          style={{
+            padding: 14,
+            border: "1px solid #ccc",
+            marginTop: 20,
+            lineHeight: "1.6"
+          }}
+        >
+          {renderMath(response)}
+        </div>
+      )}
+
+      {/* ESCALATION CARD */}
+
+      {showEscalation && (
+        <div
+          style={{
+            marginTop: 20,
+            padding: 20,
+            border: "2px solid #ff9800",
+            background: "#fff3e0",
+            borderRadius: 6
+          }}
+        >
+          <h3>Need help from a teacher?</h3>
+
+          <p>{escalationMessage}</p>
+
+          <button
+            style={{
+              padding: "10px 16px",
+              background: "#ff9800",
+              border: "none",
+              color: "white",
+              cursor: "pointer",
+              borderRadius: 4
+            }}
+          >
+            Request Expert Help
+          </button>
+        </div>
+      )}
+
     </div>
   );
 }

@@ -24,9 +24,7 @@ class StudentSupportAgentV4:
         self.lead_engine = lead_engine
 
         self.email_service = EmailService()
-
         self.lead_persistence = LeadPersistenceService()
-
         self.economics_engine = EscalationEconomicsEngine()
 
     # ==================================================
@@ -149,7 +147,7 @@ class StudentSupportAgentV4:
         return intent, strength
 
     # ==================================================
-    # CONTEXT IDENTIFICATION
+    # CONTEXT
     # ==================================================
 
     def identify_context(self, question, context):
@@ -193,13 +191,8 @@ class StudentSupportAgentV4:
             identified["chapter"]
         )
 
-        # =============================
-        # NO SYLLABUS CONTENT
-        # =============================
-
         if not chunks:
 
-            # Curiosity mode for engagement
             return self.curiosity_response(question, identified)
 
         if len(chunks) < 2:
@@ -263,19 +256,15 @@ Rules:
 - Stay strictly within syllabus content
 - Use simple student-friendly language
 - End with a short encouraging question
-- When writing any formula ALWAYS use LaTeX format.
-- Wrap formulas in block math using: \[ ... \]
-- Do NOT write formulas as plain text.
-- Do NOT use \( ... \).
-- Only use \[ ... \] for formulas.
+- When writing formulas ALWAYS use LaTeX
+- Wrap formulas using: \\[ ... \\]
 
 Example:
 
-2. Key Formula
-
-\[ F = \frac{{G m_1 m_2}}{{r^2}} \]
-
-Explain what each variable represents."""
+\\[
+F = \\frac{{G m_1 m_2}}{{r^2}}
+\\]
+"""
 
         response = self.client.chat.completions.create(
 
@@ -288,7 +277,8 @@ Explain what each variable represents."""
                 {"role": "user", "content": prompt}
             ],
 
-            temperature=0.2
+            temperature=0.2,
+            timeout=8
         )
 
         answer = response.choices[0].message.content.strip()
@@ -305,21 +295,22 @@ Explain what each variable represents."""
 
     def curiosity_response(self, question, identified):
 
+        exceeded, _ = check_and_update(0)
+
+        if exceeded:
+            return "Let's stay focused on your syllabus topic."
+
         prompt = f"""
 The student asked: "{question}"
 
 This topic is outside the syllabus.
 
-Explain the concept briefly in MAX 2 short paragraphs.
+Explain briefly in MAX 2 short paragraphs.
 
-Then politely redirect the student back to the syllabus topic:
+Then redirect the student back to:
 
 Subject: {identified["subject"]}
 Chapter: {identified["chapter"]}
-
-Structure:
-1. Short explanation
-2. Redirect to syllabus
 """
 
         response = self.client.chat.completions.create(
@@ -333,7 +324,8 @@ Structure:
                 {"role": "user", "content": prompt}
             ],
 
-            temperature=0.2
+            temperature=0.2,
+            timeout=8
         )
 
         return response.choices[0].message.content.strip()
@@ -364,15 +356,13 @@ Structure:
             intent_strength
         )
 
-        priority = self.economics_engine.determine_priority(lead_score)
-
         if not self.economics_engine.escalation_budget_available():
 
-            return "Escalation capacity is currently limited. Please try again shortly."
+            return "Escalation capacity is currently limited."
 
         self.economics_engine.register_escalation()
 
-        lead_id = self.lead_persistence.upsert_lead(
+        self.lead_persistence.upsert_lead(
             session_id=session_id,
             subject=subject,
             chapter=chapter,
@@ -385,41 +375,7 @@ Structure:
             status="QUALIFIED" if escalation_confidence >= 40 else "NEW"
         )
 
-        if escalation_confidence >= 40:
-
-            subject_line = f"CurioNest Qualified Lead - {code}"
-
-            body = f"""
-Lead ID: {lead_id}
-Session: {session_id}
-Subject: {subject}
-Chapter: {chapter}
-
-Reason: {reason}
-Confidence: {escalation_confidence}
-Engagement Score: {engagement_score}
-Intent Strength: {intent_strength}
-Lead Quality Score: {lead_score}
-Priority: {priority}
-"""
-
-            self.email_service.send_escalation(subject_line, body)
-
-        if self.ux_engine:
-
-            eligible = self.ux_engine.evaluate(
-                session_id,
-                escalation_confidence,
-                engagement_score
-            )
-
-            if eligible:
-
-                return (
-                    f"ESCALATE TO SME: {reason}\n\n"
-                    f"{self.ux_engine.get_prompt_message()}"
-                )
-
+        # CRITICAL: stable response for frontend
         return f"ESCALATE TO SME: {reason}"
 
     # ==================================================
