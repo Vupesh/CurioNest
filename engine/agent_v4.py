@@ -1,4 +1,5 @@
 import os
+import re
 from openai import OpenAI
 
 from services.logging_service import LoggingService
@@ -8,6 +9,30 @@ from engine.lead_persistence import LeadPersistenceService
 from engine.economics_engine import EscalationEconomicsEngine
 
 from budget_guard import check_and_update
+
+
+# ==============================
+# LATEX NORMALIZER
+# ==============================
+
+def normalize_latex(text: str) -> str:
+    """
+    Normalize math formatting so KaTeX always renders correctly.
+    """
+
+    if not text:
+        return text
+
+    # Convert inline math \( ... \) → block math
+    text = re.sub(r"\\\((.*?)\\\)", r"\\[\1\\]", text)
+
+    # Fix accidental \C_7H_8\
+    text = re.sub(r"\\([A-Za-z0-9_+\-\^=]+)\\", r"\\[\1\\]", text)
+
+    # Remove vertical broken text blocks
+    text = re.sub(r"(?:\b[a-zA-Z]\n){3,}", "", text)
+
+    return text
 
 
 class StudentSupportAgentV4:
@@ -56,18 +81,6 @@ class StudentSupportAgentV4:
                 intent_strength
             )
 
-        if not identified or not isinstance(identified, dict):
-
-            return self.escalate(
-                question,
-                None,
-                None,
-                "Invalid context generated",
-                "ESC_CONTEXT_INVALID",
-                session_id,
-                intent_strength
-            )
-
         if self.session_engine:
 
             self.session_engine.update_on_question(
@@ -76,21 +89,7 @@ class StudentSupportAgentV4:
                 identified.get("difficulty")
             )
 
-        try:
-
-            decision = self.decide_action(identified)
-
-        except Exception:
-
-            return self.escalate(
-                question,
-                identified.get("subject"),
-                identified.get("chapter"),
-                "Decision engine failure",
-                "ESC_DECISION_FAILURE",
-                session_id,
-                intent_strength
-            )
+        decision = self.decide_action(identified)
 
         if decision == "RESPOND":
 
@@ -134,17 +133,17 @@ class StudentSupportAgentV4:
             intent = "ADVANCED_ACADEMIC"
             strength += 2
 
-        if any(k in q for k in ["need help", "teacher", "tutor", "extra class"]):
+        if any(k in q for k in ["teacher", "tutor", "extra class", "need help"]):
             intent = "DIRECT_HELP_REQUEST"
+            strength += 4
+
+        if any(k in q for k in ["confused", "stuck", "not understanding"]):
+            intent = "FRUSTRATION_SIGNAL"
             strength += 3
 
         if any(k in q for k in ["urgent", "exam tomorrow", "asap"]):
             intent = "HIGH_URGENCY"
             strength += 3
-
-        if any(k in q for k in ["confused", "stuck", "not understanding"]):
-            intent = "FRUSTRATION_SIGNAL"
-            strength += 2
 
         return intent, strength
 
@@ -198,13 +197,13 @@ class StudentSupportAgentV4:
 
         if len(chunks) < 2:
 
-            if intent_strength >= 2:
+            if intent_strength >= 3:
 
                 return self.escalate(
                     question,
                     identified["subject"],
                     identified["chapter"],
-                    "Insufficient retrieval confidence",
+                    "Student likely needs teacher assistance",
                     "ESC_LOW_CONFIDENCE",
                     session_id,
                     intent_strength
@@ -236,7 +235,7 @@ class StudentSupportAgentV4:
                 intent_strength
             )
 
-        prompt = f"""
+        prompt = """
 You are a friendly tutor helping a student understand concepts from their syllabus.
 
 Use ONLY the syllabus context provided.
@@ -255,46 +254,30 @@ Answer format:
 
 FORMULA RULES:
 
-When writing ANY mathematical or chemical formula:
+Use LaTeX only for formulas.
 
-• ALWAYS use LaTeX
-• ALWAYS wrap formulas using block math:
+Wrap formulas using block math:
 
 \\[ ... \\]
 
-Examples:
-
-Physics:
+Example physics formula:
 
 \\[
 F = \\frac{{G m_1 m_2}}{{r^2}}
 \\]
 
-Chemistry:
-
-\\[
-NH_4^+
-\\]
+Example chemistry equation:
 
 \\[
 NH_4OH \\rightarrow NH_3 + H_2O
 \\]
 
-IMPORTANT RULES:
+Important rules:
 
-• Use LaTeX ONLY for formulas.
-• Do NOT place sentences inside LaTeX blocks.
-• Do NOT attempt to draw molecular structures using LaTeX.
-• Write explanations in normal text.
-
-Do NOT use inline math:
-
-\\( ... \\)
-
-Only use block math:
-
-\\[ ... \\]
-"""
+• Use LaTeX only for formulas.
+• Never place sentences inside formulas.
+• Write explanations outside LaTeX blocks.
+""".format(content=content, question=question)
 
         response = self.client.chat.completions.create(
 
@@ -311,6 +294,8 @@ Only use block math:
         )
 
         answer = response.choices[0].message.content.strip()
+
+        answer = normalize_latex(answer)
 
         self.logger.log("AI_RESPONSE_GENERATED", {
             "session_id": session_id
@@ -334,7 +319,7 @@ The student asked: "{question}"
 
 This topic is outside the syllabus.
 
-Explain briefly in MAX 2 short paragraphs.
+Explain briefly in maximum two short paragraphs.
 
 Then redirect the student back to:
 
@@ -356,7 +341,9 @@ Chapter: {identified["chapter"]}
             temperature=0.2
         )
 
-        return response.choices[0].message.content.strip()
+        answer = response.choices[0].message.content.strip()
+
+        return normalize_latex(answer)
 
     # ==================================================
     # ESCALATION ENGINE
