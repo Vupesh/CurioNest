@@ -236,7 +236,7 @@ class StudentSupportAgentV4:
                 intent_strength
             )
 
-        prompt = f"""
+        prompt = """
 You are a friendly tutor helping a student understand concepts from their syllabus.
 
 Use ONLY the syllabus context provided.
@@ -253,7 +253,6 @@ Answer format:
 2. Key Formula (if relevant)
 3. Example
 
-Rules:
 FORMULA RULES:
 
 When writing ANY mathematical or chemical formula:
@@ -261,36 +260,36 @@ When writing ANY mathematical or chemical formula:
 • ALWAYS use LaTeX
 • ALWAYS wrap formulas using block math:
 
-\[ ... \]
+\\[ ... \\]
 
 Examples:
 
 Physics:
 
-\[
-F = \frac{G m_1 m_2}{r^2}
-\]
+\\[
+F = \\frac{{G m_1 m_2}}{{r^2}}
+\\]
 
 Chemistry:
 
-\[
+\\[
 NH_4^+
-\]
+\\]
 
-\[
-NH_4OH \rightarrow NH_3 + H_2O
-\]
+\\[
+NH_4OH \\rightarrow NH_3 + H_2O
+\\]
 
 IMPORTANT:
 
 Do NOT use inline math:
 
-\( ... \)
+\\( ... \\)
 
 Only use block math:
 
-\[ ... \]
-"""
+\\[ ... \\]
+""".format(content=content, question=question)
 
         response = self.client.chat.completions.create(
 
@@ -303,8 +302,7 @@ Only use block math:
                 {"role": "user", "content": prompt}
             ],
 
-            temperature=0.2,
-            timeout=8
+            temperature=0.2
         )
 
         answer = response.choices[0].message.content.strip()
@@ -350,8 +348,7 @@ Chapter: {identified["chapter"]}
                 {"role": "user", "content": prompt}
             ],
 
-            temperature=0.2,
-            timeout=8
+            temperature=0.2
         )
 
         return response.choices[0].message.content.strip()
@@ -419,4 +416,3 @@ Chapter: {identified["chapter"]}
             return "advanced"
 
         return "basic"
-    
