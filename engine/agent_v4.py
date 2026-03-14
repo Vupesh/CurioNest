@@ -254,38 +254,42 @@ Answer format:
 3. Example
 
 Rules:
-- Stay strictly within syllabus content
-- Use simple student-friendly language
-- End with a short encouraging question
-
 FORMULA RULES:
 
-When writing ANY mathematical OR chemical formula:
+When writing ANY mathematical or chemical formula:
 
-• ALWAYS use LaTeX formatting
-• Wrap formulas using block math:
+• ALWAYS use LaTeX
+• ALWAYS wrap formulas using block math:
 
-\\[ ... \\]
+\[ ... \]
 
 Examples:
 
 Physics:
 
-\\[
-F = \\frac{{G m_1 m_2}}{{r^2}}
-\\]
+\[
+F = \frac{G m_1 m_2}{r^2}
+\]
 
 Chemistry:
 
-\\[
+\[
 NH_4^+
-\\]
+\]
 
-\\[
-NH_4Cl_{{(s)}} \\rightarrow NH_3_{{(g)}} + HCl_{{(g)}}
-\\]
+\[
+NH_4OH \rightarrow NH_3 + H_2O
+\]
 
-Never write formulas as plain text.
+IMPORTANT:
+
+Do NOT use inline math:
+
+\( ... \)
+
+Only use block math:
+
+\[ ... \]
 """
 
         response = self.client.chat.completions.create(
