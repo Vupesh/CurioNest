@@ -15,8 +15,8 @@ CHROMA_DIR = os.path.join(BASE_DIR, "chroma_db")
 COLLECTION_NAME = "curionest"
 
 
-def normalize(value: str) -> str:
-    """Normalize metadata fields for consistent retrieval"""
+def normalize(value: str):
+    """Normalize metadata fields"""
     return value.strip().lower().replace(" ", "_")
 
 
@@ -26,14 +26,14 @@ def ingest_document(file_path, subject, chapter, source, version):
 
     file_name = os.path.basename(file_path)
 
-    # ----------------------------
-    # Normalize metadata
-    # ----------------------------
-
     subject = normalize(subject)
     chapter = normalize(chapter)
 
     ext = os.path.splitext(file_path)[1].lower()
+
+    # ----------------------------
+    # Loader selection
+    # ----------------------------
 
     if ext == ".pdf":
         loader = PyPDFLoader(file_path)
@@ -46,13 +46,17 @@ def ingest_document(file_path, subject, chapter, source, version):
 
     documents = loader.load()
 
+    if not documents:
+        print("No documents loaded")
+        return
+
     # ----------------------------
-    # Chunking
+    # Chunking (optimized)
     # ----------------------------
 
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=600,
-        chunk_overlap=120
+        chunk_size=450,
+        chunk_overlap=80
     )
 
     chunks = splitter.split_documents(documents)
@@ -76,7 +80,7 @@ def ingest_document(file_path, subject, chapter, source, version):
     )
 
     # ----------------------------
-    # Embeddings
+    # Embedding model
     # ----------------------------
 
     embedder = OpenAIEmbeddings(
@@ -87,15 +91,16 @@ def ingest_document(file_path, subject, chapter, source, version):
 
     for c in chunks:
 
-        text = f"""
-Subject: {subject}
-Chapter: {chapter}
-Source: {file_name}
+        clean_text = c.page_content.strip()
 
-{c.page_content}
-"""
+        if len(clean_text) < 50:
+            continue
 
-        texts.append(text.strip())
+        texts.append(clean_text)
+
+    if not texts:
+        print("All chunks filtered — nothing to store")
+        return
 
     embeddings = embedder.embed_documents(texts)
 
