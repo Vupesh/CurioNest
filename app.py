@@ -7,9 +7,9 @@ from engine.agent_v4 import StudentSupportAgentV5
 from services.logging_service import LoggingService
 
 
-# =============================
-# APP INIT
-# =============================
+# ====================================
+# APP INITIALIZATION
+# ====================================
 
 app = Flask(__name__)
 CORS(app)
@@ -19,9 +19,9 @@ logger = LoggingService()
 print("\nStarting CurioNest Backend\n")
 
 
-# =============================
+# ====================================
 # LOAD RAG + AGENT
-# =============================
+# ====================================
 
 rag_store = ChromaRAGStore()
 agent = StudentSupportAgentV5(rag_store=rag_store)
@@ -30,20 +30,32 @@ print("Vector DB Loaded")
 print("Agent V5 Initialized\n")
 
 
-# =============================
+# ====================================
 # HEALTH CHECK
-# =============================
+# ====================================
 
-@app.route("/", methods=["GET"])
+@app.route("/health", methods=["GET"])
 def health():
     return jsonify({
-        "status": "CurioNest backend running"
+        "status": "ok",
+        "service": "CurioNest Backend"
     })
 
 
-# =============================
+# ====================================
+# ROOT (OPTIONAL)
+# ====================================
+
+@app.route("/", methods=["GET"])
+def root():
+    return jsonify({
+        "message": "CurioNest backend running"
+    })
+
+
+# ====================================
 # DOMAIN CONFIG
-# =============================
+# ====================================
 
 @app.route("/domain-config", methods=["GET"])
 def domain_config():
@@ -112,9 +124,9 @@ def domain_config():
     })
 
 
-# =============================
+# ====================================
 # ASK QUESTION API
-# =============================
+# ====================================
 
 @app.route("/ask-question", methods=["POST"])
 def ask_question():
@@ -124,7 +136,10 @@ def ask_question():
         data = request.get_json()
 
         if not data:
-            return jsonify({"result": "Invalid request"}), 400
+            return jsonify({
+                "type": "error",
+                "message": "Invalid request"
+            }), 400
 
         session_id = data.get("session_id", "default")
         board = data.get("board", "")
@@ -133,11 +148,14 @@ def ask_question():
         question = data.get("question", "")
 
         if not question:
-            return jsonify({"result": "No question provided"}), 400
+            return jsonify({
+                "type": "error",
+                "message": "No question provided"
+            }), 400
 
-        # -------------------------
-        # Normalize
-        # -------------------------
+        # --------------------------------
+        # Normalize inputs
+        # --------------------------------
 
         board = board.strip().lower()
         subject = subject.strip().lower()
@@ -154,22 +172,21 @@ def ask_question():
             "session_id": session_id,
             "subject": subject_key,
             "chapter": chapter,
-            "question": question[:100]
+            "question": question[:120]
         })
 
-        # -------------------------
-        # AI Agent
-        # -------------------------
+        # --------------------------------
+        # AI Agent Processing
+        # --------------------------------
 
-        answer = agent.receive_question(
+        response = agent.receive_question(
             question=question,
             context=context,
             session_id=session_id
         )
 
-        return jsonify({
-            "result": answer
-        })
+        # Response already structured
+        return jsonify(response)
 
     except Exception as e:
 
@@ -179,13 +196,14 @@ def ask_question():
         logger.log("ASK_QUESTION_ERROR", str(e))
 
         return jsonify({
-            "result": "Internal server error processing question."
-        })
+            "type": "error",
+            "message": "Internal server error processing question."
+        }), 500
 
 
-# =============================
+# ====================================
 # SERVER START
-# =============================
+# ====================================
 
 if __name__ == "__main__":
 

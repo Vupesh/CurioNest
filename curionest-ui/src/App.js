@@ -1,7 +1,11 @@
 import React, { useState, useEffect } from "react";
 import axios from "axios";
+
+import ReactMarkdown from "react-markdown";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
+
 import "katex/dist/katex.min.css";
-import { BlockMath, InlineMath } from "react-katex";
 
 const API_BASE = process.env.REACT_APP_API_BASE || "http://127.0.0.1:5000";
 
@@ -15,74 +19,11 @@ function getSessionId() {
   let id = localStorage.getItem("curionest_session");
 
   if (!id) {
-
     id = "sess_" + Math.random().toString(36).substring(2, 10);
     localStorage.setItem("curionest_session", id);
-
   }
 
   return id;
-}
-
-
-/* -----------------------------
-Math Renderer
------------------------------ */
-
-function renderMath(text) {
-
-  if (!text) return null;
-
-  const parts = [];
-
-  const regex = /\\\[(.*?)\\\]|\\\((.*?)\\\)/gs;
-
-  let lastIndex = 0;
-  let match;
-  let key = 0;
-
-  while ((match = regex.exec(text)) !== null) {
-
-    if (match.index > lastIndex) {
-
-      parts.push(
-        <span key={key++}>
-          {text.substring(lastIndex, match.index)}
-        </span>
-      );
-
-    }
-
-    if (match[1]) {
-
-      parts.push(
-        <BlockMath key={key++} math={match[1]} />
-      );
-
-    } else if (match[2]) {
-
-      parts.push(
-        <InlineMath key={key++} math={match[2]} />
-      );
-
-    }
-
-    lastIndex = regex.lastIndex;
-
-  }
-
-  if (lastIndex < text.length) {
-
-    parts.push(
-      <span key={key++}>
-        {text.substring(lastIndex)}
-      </span>
-    );
-
-  }
-
-  return parts;
-
 }
 
 
@@ -99,14 +40,12 @@ function App() {
   const [chapter, setChapter] = useState("");
 
   const [question, setQuestion] = useState("");
-
   const [response, setResponse] = useState("");
 
   const [loading, setLoading] = useState(false);
 
   const [showEscalation, setShowEscalation] = useState(false);
   const [escalationMessage, setEscalationMessage] = useState("");
-
 
   /* -----------------------------
   Dropdown values
@@ -123,7 +62,6 @@ function App() {
     board && subject && config
       ? config.education[board][subject] || []
       : [];
-
 
   /* -----------------------------
   Load Domain Config
@@ -162,7 +100,6 @@ function App() {
 
   }, []);
 
-
   /* -----------------------------
   Board Change
   ----------------------------- */
@@ -185,7 +122,6 @@ function App() {
 
   }
 
-
   /* -----------------------------
   Subject Change
   ----------------------------- */
@@ -202,7 +138,6 @@ function App() {
 
   }
 
-
   /* -----------------------------
   Chapter Change
   ----------------------------- */
@@ -212,7 +147,6 @@ function App() {
     setChapter(e.target.value);
 
   }
-
 
   /* -----------------------------
   Ask Question
@@ -235,9 +169,7 @@ function App() {
     }
 
     setLoading(true);
-
     setResponse("");
-
     setShowEscalation(false);
 
     try {
@@ -245,7 +177,6 @@ function App() {
       const res = await axios.post(`${API_BASE}/ask-question`, {
 
         session_id: getSessionId(),
-
         board,
         subject,
         chapter,
@@ -253,37 +184,54 @@ function App() {
 
       });
 
-      const result = res?.data?.result || "";
+      const result = res?.data;
 
-      /* Escalation detection */
+      if (!result) {
 
-      if (result.startsWith("ESCALATE")) {
-
-        const message = result.replace("ESCALATE TO SME:", "").trim();
-
-        setShowEscalation(true);
-        setEscalationMessage(message);
-        setResponse("");
-
-      } else {
-
-        setShowEscalation(false);
-        setResponse(result);
+        setResponse("Unexpected server response.");
+        return;
 
       }
+
+      if (result.type === "escalation") {
+
+        setShowEscalation(true);
+        setEscalationMessage(result.message || "A teacher can help you.");
+        setResponse("");
+        return;
+
+      }
+
+      if (result.type === "answer" || result.type === "curiosity") {
+
+        setShowEscalation(false);
+        setResponse(result.message || "");
+        return;
+
+      }
+
+      if (result.type === "error") {
+
+        setResponse(result.message || "System error occurred.");
+        return;
+
+      }
+
+      setResponse("Unexpected response format.");
 
     } catch (err) {
 
       console.error("API error:", err);
-
       setResponse("The system is temporarily unavailable.");
+
+    } finally {
+
+      setLoading(false);
+      setQuestion("");
 
     }
 
-    setLoading(false);
-
   }
-
 
   /* -----------------------------
   UI
@@ -298,53 +246,32 @@ function App() {
       <label><b>Board</b></label><br />
 
       <select value={board} onChange={handleBoardChange}>
-
         {boards.map((b) => (
-
-          <option key={b} value={b}>
-            {b}
-          </option>
-
+          <option key={b} value={b}>{b}</option>
         ))}
-
       </select>
 
       <br /><br />
-
 
       <label><b>Subject</b></label><br />
 
       <select value={subject} onChange={handleSubjectChange}>
-
         {subjects.map((s) => (
-
-          <option key={s} value={s}>
-            {s}
-          </option>
-
+          <option key={s} value={s}>{s}</option>
         ))}
-
       </select>
 
       <br /><br />
-
 
       <label><b>Chapter</b></label><br />
 
       <select value={chapter} onChange={handleChapterChange}>
-
         {chapters.map((c) => (
-
-          <option key={c} value={c}>
-            {c}
-          </option>
-
+          <option key={c} value={c}>{c}</option>
         ))}
-
       </select>
 
       <br /><br />
-
 
       <textarea
         value={question}
@@ -356,11 +283,8 @@ function App() {
 
       <br /><br />
 
-
       <button onClick={askQuestion} disabled={loading}>
-
         {loading ? "Processing..." : "Ask"}
-
       </button>
 
 
@@ -373,18 +297,23 @@ function App() {
             padding: 14,
             border: "1px solid #ccc",
             marginTop: 20,
-            lineHeight: "1.6"
+            lineHeight: "1.7"
           }}
         >
 
-          {renderMath(response)}
+          <ReactMarkdown
+            remarkPlugins={[remarkMath]}
+            rehypePlugins={[rehypeKatex]}
+          >
+            {response}
+          </ReactMarkdown>
 
         </div>
 
       )}
 
 
-      {/* ESCALATION CARD */}
+      {/* ESCALATION */}
 
       {showEscalation && (
 
@@ -412,9 +341,7 @@ function App() {
               borderRadius: 4
             }}
           >
-
             Request Expert Help
-
           </button>
 
         </div>
