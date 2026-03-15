@@ -13,7 +13,7 @@ from engine.economics_engine import EscalationEconomicsEngine
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 ESCALATION_THRESHOLD = int(os.getenv("ESCALATION_THRESHOLD", "12"))
 CLASSIFICATION_MAX_TOKENS = int(os.getenv("CLASSIFICATION_MAX_TOKENS", "100"))
-EXPLAIN_MAX_TOKENS = int(os.getenv("EXPLAIN_MAX_TOKENS", "350"))
+EXPLAIN_MAX_TOKENS = int(os.getenv("EXPLAIN_MAX_TOKENS", "1200"))
 
 
 def normalize_latex(text: str):
