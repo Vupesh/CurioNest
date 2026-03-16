@@ -40,12 +40,14 @@ function App() {
   const [chapter, setChapter] = useState("");
 
   const [question, setQuestion] = useState("");
-  const [response, setResponse] = useState("");
+
+  const [messages, setMessages] = useState([]);
 
   const [loading, setLoading] = useState(false);
 
   const [showEscalation, setShowEscalation] = useState(false);
   const [escalationMessage, setEscalationMessage] = useState("");
+
 
   /* -----------------------------
   Dropdown values
@@ -62,6 +64,7 @@ function App() {
     board && subject && config
       ? config.education[board][subject] || []
       : [];
+
 
   /* -----------------------------
   Load Domain Config
@@ -90,7 +93,6 @@ function App() {
       } catch (err) {
 
         console.error("Domain config failed", err);
-        setResponse("System initialization failed. Please refresh.");
 
       }
 
@@ -99,6 +101,7 @@ function App() {
     loadConfig();
 
   }, []);
+
 
   /* -----------------------------
   Board Change
@@ -122,6 +125,7 @@ function App() {
 
   }
 
+
   /* -----------------------------
   Subject Change
   ----------------------------- */
@@ -138,6 +142,7 @@ function App() {
 
   }
 
+
   /* -----------------------------
   Chapter Change
   ----------------------------- */
@@ -148,29 +153,24 @@ function App() {
 
   }
 
+
   /* -----------------------------
   Ask Question
   ----------------------------- */
 
   async function askQuestion() {
 
-    if (!question.trim()) {
+    if (!question.trim()) return;
 
-      setResponse("Please enter a question.");
-      return;
+    const userMessage = question;
 
-    }
+    setMessages(prev => [
+      ...prev,
+      { role: "user", text: userMessage }
+    ]);
 
-    if (!board || !subject || !chapter) {
-
-      setResponse("Please select board, subject and chapter.");
-      return;
-
-    }
-
+    setQuestion("");
     setLoading(true);
-    setResponse("");
-    setShowEscalation(false);
 
     try {
 
@@ -180,58 +180,66 @@ function App() {
         board,
         subject,
         chapter,
-        question
+        question: userMessage
 
       });
 
       const result = res?.data;
 
-      if (!result) {
-
-        setResponse("Unexpected server response.");
-        return;
-
-      }
+      if (!result) return;
 
       if (result.type === "escalation") {
 
+        setMessages(prev => [
+          ...prev,
+          { role: "ai", text: result.message }
+        ]);
+
         setShowEscalation(true);
         setEscalationMessage(result.message || "A teacher can help you.");
-        setResponse("");
         return;
 
       }
 
       if (result.type === "answer" || result.type === "curiosity") {
 
-        setShowEscalation(false);
-        setResponse(result.message || "");
+        setMessages(prev => [
+          ...prev,
+          { role: "ai", text: result.message || "" }
+        ]);
+
         return;
 
       }
 
       if (result.type === "error") {
 
-        setResponse(result.message || "System error occurred.");
+        setMessages(prev => [
+          ...prev,
+          { role: "ai", text: result.message }
+        ]);
+
         return;
 
       }
 
-      setResponse("Unexpected response format.");
-
     } catch (err) {
 
       console.error("API error:", err);
-      setResponse("The system is temporarily unavailable.");
+
+      setMessages(prev => [
+        ...prev,
+        { role: "ai", text: "The system is temporarily unavailable." }
+      ]);
 
     } finally {
 
       setLoading(false);
-      setQuestion("");
 
     }
 
   }
+
 
   /* -----------------------------
   UI
@@ -243,6 +251,7 @@ function App() {
 
       <h2>CurioNest</h2>
 
+
       <label><b>Board</b></label><br />
 
       <select value={board} onChange={handleBoardChange}>
@@ -252,6 +261,7 @@ function App() {
       </select>
 
       <br /><br />
+
 
       <label><b>Subject</b></label><br />
 
@@ -263,6 +273,7 @@ function App() {
 
       <br /><br />
 
+
       <label><b>Chapter</b></label><br />
 
       <select value={chapter} onChange={handleChapterChange}>
@@ -272,6 +283,53 @@ function App() {
       </select>
 
       <br /><br />
+
+
+      {/* Chat Messages */}
+
+      <div style={{marginBottom:20}}>
+
+        {messages.map((m, i) => (
+
+          <div
+            key={i}
+            style={{
+              display:"flex",
+              justifyContent: m.role === "user" ? "flex-end" : "flex-start",
+              marginBottom:10
+            }}
+          >
+
+            <div
+              style={{
+                background: m.role === "user" ? "#DCF8C6" : "#f1f1f1",
+                padding:"10px 14px",
+                borderRadius:10,
+                maxWidth:"70%",
+                lineHeight:"1.7"
+              }}
+            >
+
+              <ReactMarkdown
+                remarkPlugins={[remarkMath]}
+                rehypePlugins={[rehypeKatex]}
+              >
+                {m.text}
+              </ReactMarkdown>
+
+            </div>
+
+          </div>
+
+        ))}
+
+      </div>
+
+
+      {loading && <p>Thinking...</p>}
+
+
+      {/* Ask Question */}
 
       <textarea
         value={question}
@@ -288,32 +346,7 @@ function App() {
       </button>
 
 
-      {/* NORMAL RESPONSE */}
-
-      {!showEscalation && response && (
-
-        <div
-          style={{
-            padding: 14,
-            border: "1px solid #ccc",
-            marginTop: 20,
-            lineHeight: "1.7"
-          }}
-        >
-
-          <ReactMarkdown
-            remarkPlugins={[remarkMath]}
-            rehypePlugins={[rehypeKatex]}
-          >
-            {response}
-          </ReactMarkdown>
-
-        </div>
-
-      )}
-
-
-      {/* ESCALATION */}
+      {/* ESCALATION CARD */}
 
       {showEscalation && (
 
