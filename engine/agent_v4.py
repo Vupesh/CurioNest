@@ -2,7 +2,7 @@ import os
 import re
 import json
 import logging
-from typing import Dict, Any, List
+from typing import Dict
 from openai import OpenAI
 
 from services.logging_service import LoggingService
@@ -11,8 +11,7 @@ from engine.economics_engine import EscalationEconomicsEngine
 
 
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-ESCALATION_THRESHOLD = int(os.getenv("ESCALATION_THRESHOLD", "12"))
-CLASSIFICATION_MAX_TOKENS = int(os.getenv("CLASSIFICATION_MAX_TOKENS", "100"))
+CLASSIFICATION_MAX_TOKENS = int(os.getenv("CLASSIFICATION_MAX_TOKENS", "120"))
 EXPLAIN_MAX_TOKENS = int(os.getenv("EXPLAIN_MAX_TOKENS", "1200"))
 
 
@@ -75,6 +74,9 @@ class StudentSupportAgentV5:
         difficulty = classification["difficulty"]
         confidence = classification["confidence"]
 
+        # AI signal detection (NO hardcoding)
+        signals = self.extract_learning_signals(question)
+
         try:
 
             chunks = self.rag_store.search(question, subject, chapter)
@@ -86,7 +88,13 @@ class StudentSupportAgentV5:
 
         coverage = len(chunks)
 
-        decision = self.compute_escalation(intent, difficulty, confidence, coverage, session_id)
+        decision = self.compute_escalation(
+            intent,
+            difficulty,
+            confidence,
+            signals,
+            coverage
+        )
 
         if decision == "ESCALATE":
 
@@ -94,7 +102,7 @@ class StudentSupportAgentV5:
                 question,
                 subject,
                 chapter,
-                "Student likely needs teacher assistance",
+                signals.get("summary", "Student likely needs teacher assistance"),
                 "ESC_LEARNING_SUPPORT",
                 session_id,
                 confidence
@@ -109,18 +117,18 @@ class StudentSupportAgentV5:
         return self.explain_without_context(question)
 
     # =====================================================
-    # CLASSIFIER
+    # AI CLASSIFIER
     # =====================================================
 
     def classify_question(self, question: str):
 
         prompt = f"""
-Classify the student question.
+Analyze the student question.
 
 Return JSON only.
 
 intent:
-["BASIC_CONCEPT","CONFUSED_STUDENT","DIRECT_HELP_REQUEST","ADVANCED_TOPIC","EXAM_URGENCY"]
+["CONCEPT_LEARNING","CONFUSION","HELP_REQUEST","ADVANCED_TOPIC","GENERAL"]
 
 difficulty:
 ["BASIC","INTERMEDIATE","ADVANCED"]
@@ -132,7 +140,7 @@ Question:
 """
 
         default = {
-            "intent": "BASIC_CONCEPT",
+            "intent": "CONCEPT_LEARNING",
             "difficulty": "BASIC",
             "confidence": 0.5
         }
@@ -154,8 +162,6 @@ Question:
             intent = data.get("intent", default["intent"])
             difficulty = data.get("difficulty", default["difficulty"])
 
-            # ---------- FIX FOR LIST OUTPUT ----------
-
             if isinstance(intent, list):
                 intent = intent[0]
 
@@ -173,41 +179,89 @@ Question:
             return default
 
     # =====================================================
-    # ESCALATION ENGINE
+    # AI SIGNAL DETECTION (NO HARDCODING)
     # =====================================================
 
-    def compute_escalation(self, intent, difficulty, confidence, coverage, session_id):
+    def extract_learning_signals(self, question: str):
+
+        prompt = f"""
+Analyze the student message and detect learning signals.
+
+Return JSON only.
+
+signals:
+["CONFUSION","URGENCY","HELP_SEEKING","ADVANCED_TOPIC","NONE"]
+
+signal_strength: 0-10
+
+summary: short explanation
+
+Student message:
+{question}
+"""
+
+        default = {
+            "signals": ["NONE"],
+            "signal_strength": 1,
+            "summary": "normal learning request"
+        }
+
+        try:
+
+            response = self.client.chat.completions.create(
+                model=OPENAI_MODEL,
+                temperature=0,
+                max_tokens=120,
+                messages=[
+                    {"role": "system", "content": "Return JSON only."},
+                    {"role": "user", "content": prompt}
+                ]
+            )
+
+            data = safe_json_parse(response.choices[0].message.content, default)
+
+            signals = data.get("signals", ["NONE"])
+
+            if isinstance(signals, str):
+                signals = [signals]
+
+            return {
+                "signals": signals,
+                "strength": int(data.get("signal_strength", 1)),
+                "summary": data.get("summary", "")
+            }
+
+        except Exception:
+
+            return default
+
+    # =====================================================
+    # ESCALATION DECISION
+    # =====================================================
+
+    def compute_escalation(self, intent, difficulty, confidence, signals, coverage):
 
         score = 0
 
-        intent_weights = {
-            "DIRECT_HELP_REQUEST": 12,
-            "CONFUSED_STUDENT": 10,
-            "ADVANCED_TOPIC": 8,
-            "EXAM_URGENCY": 8
-        }
+        # AI derived signal strength
+        score += signals.get("strength", 1)
 
-        score += intent_weights.get(intent, 0)
-
-        difficulty_weights = {
-            "ADVANCED": 6,
-            "INTERMEDIATE": 3
-        }
-
-        score += difficulty_weights.get(difficulty, 0)
-
+        # coverage weakness increases escalation chance
         if coverage < 2:
             score += 3
 
-        self.logger.log("ESCALATION_SCORE", {"score": score})
+        self.logger.log("ESCALATION_SIGNAL_SCORE", {
+            "score": score,
+            "signals": signals
+        })
 
-        if score >= ESCALATION_THRESHOLD:
+        if score >= 8:
             return "ESCALATE"
 
         return "RESPOND"
 
     # =====================================================
-    # RAG TUTOR
+    # RAG ANSWER
     # =====================================================
 
     def explain_with_ai(self, question, chunks):
@@ -228,12 +282,6 @@ Answer format:
 1. Concept
 2. Formula
 3. Example
-
-Use LaTeX:
-
-\\[
-V = IR
-\\]
 """
 
         res = self.client.chat.completions.create(
@@ -252,7 +300,7 @@ V = IR
         }
 
     # =====================================================
-    # FALLBACK TUTOR
+    # FALLBACK ANSWER
     # =====================================================
 
     def explain_without_context(self, question):
