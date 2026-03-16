@@ -6,6 +6,9 @@ from engine.rag import ChromaRAGStore
 from engine.agent_v4 import StudentSupportAgentV5
 from services.logging_service import LoggingService
 
+# Lead capture API
+from capture_lead import capture_lead
+
 
 # ====================================
 # APP INITIALIZATION
@@ -31,6 +34,17 @@ print("Agent V5 Initialized\n")
 
 
 # ====================================
+# ROOT ROUTE
+# ====================================
+
+@app.route("/", methods=["GET"])
+def root():
+    return jsonify({
+        "message": "CurioNest backend running"
+    })
+
+
+# ====================================
 # HEALTH CHECK
 # ====================================
 
@@ -39,17 +53,6 @@ def health():
     return jsonify({
         "status": "ok",
         "service": "CurioNest Backend"
-    })
-
-
-# ====================================
-# ROOT (OPTIONAL)
-# ====================================
-
-@app.route("/", methods=["GET"])
-def root():
-    return jsonify({
-        "message": "CurioNest backend running"
     })
 
 
@@ -153,10 +156,7 @@ def ask_question():
                 "message": "No question provided"
             }), 400
 
-        # --------------------------------
-        # Normalize inputs
-        # --------------------------------
-
+        # Normalize
         board = board.strip().lower()
         subject = subject.strip().lower()
         chapter = chapter.strip().lower()
@@ -175,17 +175,13 @@ def ask_question():
             "question": question[:120]
         })
 
-        # --------------------------------
-        # AI Agent Processing
-        # --------------------------------
-
+        # AI Agent
         response = agent.receive_question(
             question=question,
             context=context,
             session_id=session_id
         )
 
-        # Response already structured
         return jsonify(response)
 
     except Exception as e:
@@ -199,6 +195,15 @@ def ask_question():
             "type": "error",
             "message": "Internal server error processing question."
         }), 500
+
+
+# ====================================
+# LEAD CAPTURE API
+# ====================================
+
+@app.route("/capture-lead", methods=["POST"])
+def capture_lead_route():
+    return capture_lead()
 
 
 # ====================================
