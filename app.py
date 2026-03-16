@@ -1,3 +1,5 @@
+from dotenv import load_dotenv
+load_dotenv()
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import traceback
@@ -40,7 +42,8 @@ print("Agent V5 Initialized\n")
 @app.route("/", methods=["GET"])
 def root():
     return jsonify({
-        "message": "CurioNest backend running"
+        "service": "CurioNest Backend",
+        "status": "running"
     })
 
 
@@ -156,7 +159,7 @@ def ask_question():
                 "message": "No question provided"
             }), 400
 
-        # Normalize
+        # Normalize input
         board = board.strip().lower()
         subject = subject.strip().lower()
         chapter = chapter.strip().lower()
@@ -175,7 +178,7 @@ def ask_question():
             "question": question[:120]
         })
 
-        # AI Agent
+        # Send to AI Agent
         response = agent.receive_question(
             question=question,
             context=context,
@@ -203,7 +206,18 @@ def ask_question():
 
 @app.route("/capture-lead", methods=["POST"])
 def capture_lead_route():
-    return capture_lead()
+
+    try:
+        return capture_lead()
+
+    except Exception as e:
+
+        traceback.print_exc()
+
+        return jsonify({
+            "status": "error",
+            "message": "Lead capture failed"
+        }), 500
 
 
 # ====================================

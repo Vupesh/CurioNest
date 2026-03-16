@@ -1,43 +1,72 @@
 from flask import request, jsonify
 import psycopg2
 import os
+from dotenv import load_dotenv
 
-
-def get_conn():
-
-    return psycopg2.connect(
-        dbname="curionest_db",
-        user="postgres",
-        password=os.getenv("DB_PASSWORD"),
-        host="localhost",
-        port="5432"
-    )
-
+load_dotenv()
 
 def capture_lead():
 
-    data = request.get_json()
+    try:
 
-    lead_id = data.get("lead_id")
-    name = data.get("name")
-    email = data.get("email")
-    phone = data.get("mobile")
+        data = request.get_json()
 
-    conn = get_conn()
-    cur = conn.cursor()
+        session_id = data.get("session_id")
+        name = data.get("name")
+        email = data.get("email")
+        phone = data.get("phone")
 
-    cur.execute(
-        """
-        INSERT INTO lead_contacts
-        (lead_id,name,email,phone)
-        VALUES (%s,%s,%s,%s)
-        """,
-        (lead_id,name,email,phone)
-    )
+        if not session_id:
+            return jsonify({
+                "status": "error",
+                "message": "session_id required"
+            }), 400
 
-    conn.commit()
+        conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+        cur = conn.cursor()
 
-    cur.close()
-    conn.close()
+        # get latest lead for session
 
-    return jsonify({"status":"lead_saved"})
+        cur.execute("""
+            SELECT id
+            FROM leads
+            WHERE session_id = %s
+            ORDER BY created_at DESC
+            LIMIT 1
+        """, (session_id,))
+
+        row = cur.fetchone()
+
+        if not row:
+            return jsonify({
+                "status": "error",
+                "message": "lead not found"
+            }), 404
+
+        lead_id = row[0]
+
+        # insert contact
+
+        cur.execute("""
+            INSERT INTO lead_contacts
+            (lead_id, name, email, phone)
+            VALUES (%s,%s,%s,%s)
+        """, (lead_id, name, email, phone))
+
+        conn.commit()
+
+        cur.close()
+        conn.close()
+
+        return jsonify({
+            "status": "success"
+        })
+
+    except Exception as e:
+
+        print("CAPTURE LEAD ERROR:", e)
+
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
