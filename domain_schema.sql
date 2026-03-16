@@ -1,43 +1,68 @@
 -- CurioNest Dynamic Domain Configuration Schema
 
-CREATE TABLE domains (
-    id SERIAL PRIMARY KEY,
-    name TEXT UNIQUE NOT NULL
+C-- ==============================
+-- Lead System
+-- ==============================
+
+CREATE TYPE lead_status AS ENUM (
+    'NEW',
+    'QUALIFIED',
+    'CONTACTED',
+    'CONVERTED'
 );
 
-CREATE TABLE boards (
-    id SERIAL PRIMARY KEY,
-    domain_id INT REFERENCES domains(id) ON DELETE CASCADE,
-    name TEXT NOT NULL
+CREATE TABLE leads (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id VARCHAR(100) NOT NULL,
+    subject VARCHAR(100),
+    chapter VARCHAR(100),
+    question TEXT,
+
+    escalation_code VARCHAR(100) NOT NULL,
+    escalation_reason TEXT,
+
+    confidence DOUBLE PRECISION NOT NULL,
+    engagement_score DOUBLE PRECISION NOT NULL,
+    intent_strength INT NOT NULL,
+
+    status lead_status NOT NULL DEFAULT 'NEW',
+
+    created_at TIMESTAMP DEFAULT now(),
+    updated_at TIMESTAMP DEFAULT now()
 );
 
-CREATE TABLE categories (
-    id SERIAL PRIMARY KEY,
-    board_id INT REFERENCES boards(id) ON DELETE CASCADE,
-    name TEXT NOT NULL
+CREATE INDEX idx_leads_session_id
+ON leads(session_id);
+
+-- ==============================
+-- Lead Contacts
+-- ==============================
+
+CREATE TABLE lead_contacts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    lead_id UUID REFERENCES leads(id) ON DELETE CASCADE,
+
+    name TEXT,
+    email TEXT,
+    phone TEXT,
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE topics (
-    id SERIAL PRIMARY KEY,
-    category_id INT REFERENCES categories(id) ON DELETE CASCADE,
-    name TEXT NOT NULL
+-- ==============================
+-- Lead Events
+-- ==============================
+
+CREATE TABLE lead_events (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    lead_id UUID REFERENCES leads(id) ON DELETE CASCADE,
+    session_id VARCHAR(100),
+
+    event_type TEXT,
+    escalation_code TEXT,
+
+    confidence DOUBLE PRECISION,
+    engagement_score DOUBLE PRECISION,
+
+    created_at TIMESTAMP DEFAULT now()
 );
-
--- Initial Domain Data
-
-INSERT INTO domains (name)
-VALUES ('education');
-
-INSERT INTO boards (domain_id, name)
-VALUES
-(1,'CBSE'),
-(1,'ICSE');
-
-INSERT INTO categories (board_id,name)
-VALUES
-(1,'Physics'),
-(1,'Chemistry'),
-(1,'Biology'),
-(2,'Physics'),
-(2,'Chemistry'),
-(2,'Biology');
