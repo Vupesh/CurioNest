@@ -11,9 +11,10 @@ from engine.lead_persistence import LeadPersistenceService
 from engine.economics_engine import EscalationEconomicsEngine
 
 
-# ==================== CONFIGURATION ====================
+# ================= CONFIG =================
 
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+
 CLASSIFICATION_MAX_TOKENS = int(os.getenv("CLASSIFICATION_MAX_TOKENS", "160"))
 EXPLAIN_MAX_TOKENS = int(os.getenv("EXPLAIN_MAX_TOKENS", "1200"))
 
@@ -22,9 +23,12 @@ MIN_COVERAGE = int(os.getenv("MIN_COVERAGE", "2"))
 CONTEXT_WEAK_PENALTY = int(os.getenv("CONTEXT_WEAK_PENALTY", "2"))
 COVERAGE_PENALTY = int(os.getenv("COVERAGE_PENALTY", "2"))
 
+ESCALATION_COOLDOWN = int(os.getenv("ESCALATION_COOLDOWN", "3"))
+
+
+# ================= UTILITIES =================
 
 def normalize_latex(text: str) -> str:
-
     if not text:
         return text
 
@@ -35,16 +39,18 @@ def normalize_latex(text: str) -> str:
 
 
 def safe_json_parse(response_content: str, default: Dict) -> Dict:
-
     try:
         cleaned = re.sub(r"^```json\s*", "", response_content.strip(), flags=re.IGNORECASE)
         cleaned = re.sub(r"\s*```$", "", cleaned)
         return json.loads(cleaned)
-
     except Exception:
         logging.error("JSON parse failure", exc_info=True)
         return default
 
+
+# ============================================================
+# AGENT
+# ============================================================
 
 class StudentSupportAgentV5:
 
@@ -64,6 +70,9 @@ class StudentSupportAgentV5:
         self.lead_persistence = LeadPersistenceService()
         self.economics_engine = EscalationEconomicsEngine()
 
+        # session escalation memory
+        self.session_escalations = {}
+
     # =====================================================
     # ENTRY POINT
     # =====================================================
@@ -73,36 +82,12 @@ class StudentSupportAgentV5:
         subject = context.get("subject")
         chapter = context.get("chapter")
 
-        # ---------------------------
-        # SESSION MEMORY STORE
-        # ---------------------------
-
-        if self.session_engine:
-            self.session_engine.store_message(session_id, "user", question)
-
-        conversation_history = []
-
-        if self.session_engine:
-            conversation_history = self.session_engine.get_recent_messages(session_id)
-
-        history_text = "\n".join(
-            [f'{m["role"]}: {m["message"]}' for m in conversation_history]
-        )
-
-        # ---------------------------
-        # ANALYZE QUESTION
-        # ---------------------------
-
-        analysis = self.analyze_question(question, history_text)
+        analysis = self.analyze_question(question)
 
         intent = analysis["intent"]
         difficulty = analysis["difficulty"]
         confidence = analysis["confidence"]
         signals = analysis["signals"]
-
-        # ---------------------------
-        # RAG RETRIEVAL
-        # ---------------------------
 
         try:
             chunks = self.rag_store.search(question, subject, chapter)
@@ -123,11 +108,11 @@ class StudentSupportAgentV5:
             confidence,
             signals,
             coverage,
-            context_quality
+            context_quality,
+            session_id
         )
 
         if decision == "ESCALATE":
-
             return self.escalate(
                 question,
                 subject,
@@ -139,34 +124,19 @@ class StudentSupportAgentV5:
             )
 
         if coverage > 0:
+            return self.explain_with_ai(question, chunks)
 
-            response = self.explain_with_ai(question, chunks, history_text)
+        self.logger.log("RAG_FALLBACK", {"question": question})
 
-        else:
-
-            self.logger.log("RAG_FALLBACK", {"question": question})
-
-            response = self.explain_without_context(question, history_text)
-
-        # ---------------------------
-        # STORE AI RESPONSE
-        # ---------------------------
-
-        if self.session_engine:
-            self.session_engine.store_message(session_id, "ai", response["message"])
-
-        return response
+        return self.explain_without_context(question)
 
     # =====================================================
-    # COMBINED ANALYSIS
+    # QUESTION ANALYSIS
     # =====================================================
 
-    def analyze_question(self, question: str, history_text: str) -> Dict[str, Any]:
+    def analyze_question(self, question: str) -> Dict[str, Any]:
 
         prompt = f"""
-Conversation History:
-{history_text}
-
 Analyze the student question.
 
 Return JSON only.
@@ -290,7 +260,17 @@ Context:
     # ESCALATION DECISION
     # =====================================================
 
-    def compute_escalation(self, intent, difficulty, confidence, signals, coverage, context_quality):
+    def compute_escalation(self, intent, difficulty, confidence, signals, coverage, context_quality, session_id):
+
+        # ---------- Hard UX Rules ----------
+
+        if intent in ["CONCEPT_LEARNING", "GENERAL"]:
+            return "RESPOND"
+
+        if intent in ["HELP_REQUEST", "ADVANCED_TOPIC"]:
+            return "ESCALATE"
+
+        # ---------- Confusion Handling ----------
 
         score = signals.get("strength", 1)
 
@@ -302,29 +282,36 @@ Context:
 
         self.logger.log("ESCALATION_SIGNAL_SCORE", {
             "score": score,
-            "threshold": ESCALATION_THRESHOLD,
             "intent": intent,
-            "difficulty": difficulty,
-            "confidence": confidence,
             "coverage": coverage,
-            "context_quality": context_quality,
-            "signals": signals
+            "context_quality": context_quality
         })
 
-        return "ESCALATE" if score >= ESCALATION_THRESHOLD else "RESPOND"
+        # cooldown logic
+
+        recent = self.session_escalations.get(session_id, 0)
+
+        if recent >= ESCALATION_COOLDOWN:
+            self.session_escalations[session_id] = 0
+            return "RESPOND"
+
+        if score >= ESCALATION_THRESHOLD:
+
+            self.session_escalations[session_id] = recent + 1
+
+            return "ESCALATE"
+
+        return "RESPOND"
 
     # =====================================================
     # RAG ANSWER
     # =====================================================
 
-    def explain_with_ai(self, question: str, chunks: List[str], history_text: str):
+    def explain_with_ai(self, question: str, chunks: List[str]):
 
         content = "\n\n".join(chunks)
 
         prompt = f"""
-Conversation History:
-{history_text}
-
 Use ONLY the syllabus context.
 
 Context:
@@ -359,15 +346,7 @@ Example
     # FALLBACK
     # =====================================================
 
-    def explain_without_context(self, question: str, history_text: str):
-
-        prompt = f"""
-Conversation History:
-{history_text}
-
-Question:
-{question}
-"""
+    def explain_without_context(self, question: str):
 
         res = self.client.chat.completions.create(
             model=OPENAI_MODEL,
@@ -375,7 +354,7 @@ Question:
             temperature=0.2,
             messages=[
                 {"role": "system", "content": "You are a helpful tutor."},
-                {"role": "user", "content": prompt}
+                {"role": "user", "content": question}
             ]
         )
 
