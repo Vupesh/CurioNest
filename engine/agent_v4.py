@@ -29,10 +29,17 @@ ESCALATION_COOLDOWN = int(os.getenv("ESCALATION_COOLDOWN", "3"))
 # ================= UTILITIES =================
 
 def normalize_latex(text: str) -> str:
+
     if not text:
         return text
 
-    text = re.sub(r"\\\((.*?)\\\)", r"\\[\1\\]", text)
+    # convert \( ... \) → $ ... $
+    text = re.sub(r"\\\((.*?)\\\)", r"$\1$", text)
+
+    # convert \[ ... \] → $$ ... $$
+    text = re.sub(r"\\\[(.*?)\\\]", r"$$\1$$", text)
+
+    # remove OCR noise lines
     text = re.sub(r"(?:\b[a-zA-Z]\n){3,}", "", text)
 
     return text.strip()
