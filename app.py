@@ -1,14 +1,21 @@
 from dotenv import load_dotenv
 load_dotenv()
+
+import os
+import traceback
+
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import traceback
+
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 from engine.rag import ChromaRAGStore
 from engine.agent_v4 import StudentSupportAgentV5
+from engine.session_memory import SessionMemoryService
+
 from services.logging_service import LoggingService
 
-# Lead capture API
 from capture_lead import capture_lead
 
 
@@ -17,19 +24,37 @@ from capture_lead import capture_lead
 # ====================================
 
 app = Flask(__name__)
+
 CORS(app)
 
 logger = LoggingService()
+
+
+# ====================================
+# RATE LIMITER (PRODUCTION PROTECTION)
+# ====================================
+
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=["100 per hour"]
+)
 
 print("\nStarting CurioNest Backend\n")
 
 
 # ====================================
-# LOAD RAG + AGENT
+# LOAD CORE SERVICES
 # ====================================
 
 rag_store = ChromaRAGStore()
-agent = StudentSupportAgentV5(rag_store=rag_store)
+
+session_memory = SessionMemoryService()
+
+agent = StudentSupportAgentV5(
+    rag_store=rag_store,
+    session_engine=session_memory
+)
 
 print("Vector DB Loaded")
 print("Agent V5 Initialized\n")
@@ -41,6 +66,7 @@ print("Agent V5 Initialized\n")
 
 @app.route("/", methods=["GET"])
 def root():
+
     return jsonify({
         "service": "CurioNest Backend",
         "status": "running"
@@ -53,6 +79,7 @@ def root():
 
 @app.route("/health", methods=["GET"])
 def health():
+
     return jsonify({
         "status": "ok",
         "service": "CurioNest Backend"
@@ -135,6 +162,7 @@ def domain_config():
 # ====================================
 
 @app.route("/ask-question", methods=["POST"])
+@limiter.limit("10 per minute")
 def ask_question():
 
     try:
@@ -148,6 +176,7 @@ def ask_question():
             }), 400
 
         session_id = data.get("session_id", "default")
+
         board = data.get("board", "")
         subject = data.get("subject", "")
         chapter = data.get("chapter", "")
@@ -159,7 +188,7 @@ def ask_question():
                 "message": "No question provided"
             }), 400
 
-        # Normalize input
+        # Normalize
         board = board.strip().lower()
         subject = subject.strip().lower()
         chapter = chapter.strip().lower()
@@ -178,7 +207,6 @@ def ask_question():
             "question": question[:120]
         })
 
-        # Send to AI Agent
         response = agent.receive_question(
             question=question,
             context=context,
@@ -208,6 +236,7 @@ def ask_question():
 def capture_lead_route():
 
     try:
+
         return capture_lead()
 
     except Exception as e:
@@ -228,6 +257,6 @@ if __name__ == "__main__":
 
     app.run(
         host="0.0.0.0",
-        port=5000,
-        debug=True
+        port=int(os.getenv("PORT", 5000)),
+        debug=False
     )
