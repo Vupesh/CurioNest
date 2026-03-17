@@ -48,4 +48,4 @@ from engine.rag import ChromaRAGStore
 
 rag = ChromaRAGStore()
 
-rag.search("What is photosynthesis","Physics","Electricity")
+rag.search("What is photosynthesis","Physics","Electricity")    

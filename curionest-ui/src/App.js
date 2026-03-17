@@ -19,11 +19,12 @@ const getSessionId = () => {
         "sess_" +
         Math.random().toString(36).substring(2, 15) +
         Math.random().toString(36).substring(2, 15);
+
       localStorage.setItem("curionest_session", id);
     }
 
     return id;
-  } catch (err) {
+  } catch {
     return `sess_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
   }
 };
@@ -32,6 +33,7 @@ const getSessionId = () => {
 MAIN APP
 ============================= */
 function App() {
+
   const [config, setConfig] = useState(null);
   const [configError, setConfigError] = useState(null);
 
@@ -43,19 +45,16 @@ function App() {
   const [messages, setMessages] = useState([]);
 
   const [loading, setLoading] = useState(false);
-  const [apiError, setApiError] = useState(null);
 
   const [showEscalation, setShowEscalation] = useState(false);
   const [escalationMessage, setEscalationMessage] = useState("");
 
   const [showLeadForm, setShowLeadForm] = useState(false);
   const [leadSubmitted, setLeadSubmitted] = useState(false);
-  const [leadError, setLeadError] = useState(null);
 
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
-  const [formErrors, setFormErrors] = useState({});
 
   const chatEndRef = useRef(null);
   const inputRef = useRef(null);
@@ -76,6 +75,7 @@ function App() {
   /* -----------------------------
   Derived State
   ----------------------------- */
+
   const boards = config ? Object.keys(config.education || {}) : [];
 
   const subjects =
@@ -91,63 +91,87 @@ function App() {
   /* -----------------------------
   Load Domain Config
   ----------------------------- */
+
   useEffect(() => {
+
     let mounted = true;
 
     const loadConfig = async () => {
+
       try {
+
         const res = await axios.get(`${API_BASE}/domain-config`);
+
         if (!mounted) return;
 
         const cfg = res.data;
+
         setConfig(cfg);
 
         const firstBoard = Object.keys(cfg.education)[0];
+
         if (firstBoard) {
+
           const firstSubject = Object.keys(cfg.education[firstBoard])[0];
+
           const firstChapter =
             cfg.education[firstBoard][firstSubject]?.[0] || "";
 
           setBoard(firstBoard);
           setSubject(firstSubject);
           setChapter(firstChapter);
+
         }
+
       } catch (err) {
+
         console.error("Domain config error", err);
         setConfigError("Failed to load configuration.");
+
       }
+
     };
 
     loadConfig();
 
-    return () => {
-      mounted = false;
-    };
+    return () => { mounted = false };
+
   }, []);
 
   /* -----------------------------
   Dropdown Handlers
   ----------------------------- */
+
   const handleBoardChange = (e) => {
+
     const newBoard = e.target.value;
+
     setBoard(newBoard);
 
     const newSubjects = Object.keys(config.education[newBoard]);
+
     const firstSubject = newSubjects[0];
+
     setSubject(firstSubject);
 
     const firstChapter =
       config.education[newBoard][firstSubject]?.[0] || "";
+
     setChapter(firstChapter);
+
   };
 
   const handleSubjectChange = (e) => {
+
     const newSubject = e.target.value;
+
     setSubject(newSubject);
 
     const firstChapter =
       config.education[board][newSubject]?.[0] || "";
+
     setChapter(firstChapter);
+
   };
 
   const handleChapterChange = (e) => {
@@ -155,42 +179,20 @@ function App() {
   };
 
   /* -----------------------------
-  Validation
-  ----------------------------- */
-  const validateEmail = (email) =>
-    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-
-  const validatePhone = (phone) =>
-    /^[0-9]{10}$/.test(phone.replace(/\D/g, ""));
-
-  const validateForm = () => {
-    const errors = {};
-
-    if (!name.trim()) errors.name = "Name required";
-    if (!email.trim()) errors.email = "Email required";
-    else if (!validateEmail(email)) errors.email = "Invalid email";
-    if (!phone.trim()) errors.phone = "Phone required";
-    else if (!validatePhone(phone)) errors.phone = "Invalid phone";
-
-    setFormErrors(errors);
-    return Object.keys(errors).length === 0;
-  };
-
-  /* -----------------------------
   Ask Question
   ----------------------------- */
-  const askQuestion = useCallback(async () => {
-    if (!question.trim()) return;
 
-    // Reset escalation state
-    setShowEscalation(false);
-    setShowLeadForm(false);
-    setLeadSubmitted(false);
-    setLeadError(null);
+  const askQuestion = useCallback(async () => {
+
+    if (!question.trim()) return;
 
     const trimmedQuestion = question.trim();
 
-    setMessages((prev) => [
+    setShowEscalation(false);
+    setShowLeadForm(false);
+    setLeadSubmitted(false);
+
+    setMessages(prev => [
       ...prev,
       { role: "user", text: trimmedQuestion }
     ]);
@@ -199,59 +201,74 @@ function App() {
     setLoading(true);
 
     try {
+
       const res = await axios.post(`${API_BASE}/ask-question`, {
+
         session_id: getSessionId(),
         board,
         subject,
         chapter,
         question: trimmedQuestion
+
       });
 
       const result = res.data;
 
       if (result.type === "escalation") {
-        setMessages((prev) => [
+
+        setMessages(prev => [
           ...prev,
           { role: "ai", text: result.message }
         ]);
+
         setShowEscalation(true);
         setEscalationMessage(result.message);
+
         return;
+
       }
 
       if (result.type === "answer" || result.type === "curiosity") {
-        setMessages((prev) => [
+
+        setMessages(prev => [
           ...prev,
           { role: "ai", text: result.message }
         ]);
-        return;
+
       }
+
     } catch (err) {
+
       console.error("API error", err);
-      setMessages((prev) => [
+
+      setMessages(prev => [
         ...prev,
-        {
-          role: "ai",
-          text: "System temporarily unavailable."
-        }
+        { role: "ai", text: "System temporarily unavailable." }
       ]);
+
     } finally {
+
       setLoading(false);
+
     }
+
   }, [question, board, subject, chapter]);
 
   /* -----------------------------
   Submit Lead
   ----------------------------- */
+
   const submitLead = async () => {
-    if (!validateForm()) return;
 
     try {
+
       await axios.post(`${API_BASE}/capture-lead`, {
+
         session_id: getSessionId(),
         name,
         email,
         phone
+
       });
 
       setLeadSubmitted(true);
@@ -261,44 +278,47 @@ function App() {
       setName("");
       setEmail("");
       setPhone("");
+
     } catch (err) {
+
       console.error("Lead submit error", err);
-      setLeadError("Submission failed.");
+
     }
+
   };
 
   /* -----------------------------
   UI
   ----------------------------- */
+
   if (configError) {
     return <div>{configError}</div>;
   }
 
   return (
+
     <div style={{ padding: 40, maxWidth: 800, margin: "auto" }}>
+
       <h2>CurioNest</h2>
 
       <select value={board} onChange={handleBoardChange}>
-        {boards.map((b) => (
-          <option key={b} value={b}>{b}</option>
-        ))}
+        {boards.map(b => <option key={b}>{b}</option>)}
       </select>
 
       <select value={subject} onChange={handleSubjectChange}>
-        {subjects.map((s) => (
-          <option key={s} value={s}>{s}</option>
-        ))}
+        {subjects.map(s => <option key={s}>{s}</option>)}
       </select>
 
       <select value={chapter} onChange={handleChapterChange}>
-        {chapters.map((c) => (
-          <option key={c} value={c}>{c}</option>
-        ))}
+        {chapters.map(c => <option key={c}>{c}</option>)}
       </select>
 
       {/* Chat */}
+
       <div style={{ marginTop: 20 }}>
+
         {messages.map((m, i) => (
+
           <div
             key={i}
             style={{
@@ -306,6 +326,7 @@ function App() {
               marginBottom: 10
             }}
           >
+
             <div
               style={{
                 display: "inline-block",
@@ -315,16 +336,22 @@ function App() {
                 maxWidth: "70%"
               }}
             >
+
               <ReactMarkdown
                 remarkPlugins={[remarkMath]}
                 rehypePlugins={[rehypeKatex]}
               >
                 {m.text}
               </ReactMarkdown>
+
             </div>
+
           </div>
+
         ))}
+
         <div ref={chatEndRef} />
+
       </div>
 
       {loading && <p>Thinking...</p>}
@@ -340,7 +367,9 @@ function App() {
       <button onClick={askQuestion}>Ask</button>
 
       {/* Escalation */}
+
       {showEscalation && !showLeadForm && (
+
         <div
           style={{
             marginTop: 20,
@@ -349,43 +378,70 @@ function App() {
             background: "#fff3e0"
           }}
         >
+
           <h3>Need help from a teacher?</h3>
+
           <p>{escalationMessage}</p>
+
           <button onClick={() => setShowLeadForm(true)}>
             Talk to a Teacher
           </button>
+
         </div>
+
       )}
 
       {/* Lead Form */}
+
       {showLeadForm && !leadSubmitted && (
+
         <div style={{ marginTop: 20 }}>
+
           <input
             placeholder="Name"
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
+
           <input
             placeholder="Email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
           />
+
           <input
             placeholder="Phone"
             value={phone}
             onChange={(e) => setPhone(e.target.value)}
           />
+
           <button onClick={submitLead}>Submit</button>
+
         </div>
+
       )}
 
+      {/* Lead Success */}
+
       {leadSubmitted && (
+
         <div style={{ marginTop: 20 }}>
-          A teacher will contact you shortly.
+
+          <h3>✅ A teacher will contact you shortly.</h3>
+
+          <p>
+            You can continue learning while waiting.
+            Ask another question below.
+          </p>
+
         </div>
+
       )}
+
     </div>
+
   );
+
 }
 
 export default App;
