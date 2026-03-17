@@ -431,7 +431,7 @@ function App() {
 
           <p>
             You can continue learning while waiting.
-            Ask another question below.
+            Ask another question in the ask box.
           </p>
 
         </div>
