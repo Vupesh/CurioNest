@@ -39,7 +39,10 @@ def normalize_latex(text: str) -> str:
     # convert \[ ... \] → $$ ... $$
     text = re.sub(r"\\\[(.*?)\\\]", r"$$\1$$", text)
 
-    # remove OCR noise lines
+    # fix multi-line equations
+    text = re.sub(r"\n\s*\n", "\n\n", text)
+
+    # remove OCR garbage
     text = re.sub(r"(?:\b[a-zA-Z]\n){3,}", "", text)
 
     return text.strip()
