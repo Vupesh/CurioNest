@@ -29,9 +29,6 @@ const getSessionId = () => {
   }
 };
 
-/* =============================
-MAIN APP
-============================= */
 function App() {
 
   const [config, setConfig] = useState(null);
@@ -149,7 +146,6 @@ function App() {
     setBoard(newBoard);
 
     const newSubjects = Object.keys(config.education[newBoard]);
-
     const firstSubject = newSubjects[0];
 
     setSubject(firstSubject);
@@ -184,13 +180,12 @@ function App() {
 
   const askQuestion = useCallback(async () => {
 
-    if (!question.trim()) return;
+    if (!question.trim() || loading) return;
 
     const trimmedQuestion = question.trim();
 
     setShowEscalation(false);
     setShowLeadForm(false);
-    setLeadSubmitted(false);
 
     setMessages(prev => [
       ...prev,
@@ -243,7 +238,7 @@ function App() {
 
       setMessages(prev => [
         ...prev,
-        { role: "ai", text: "System temporarily unavailable." }
+        { role: "ai", text: "⚠️ System temporarily unavailable. Please try again." }
       ]);
 
     } finally {
@@ -252,13 +247,18 @@ function App() {
 
     }
 
-  }, [question, board, subject, chapter]);
+  }, [question, board, subject, chapter, loading]);
 
   /* -----------------------------
   Submit Lead
   ----------------------------- */
 
   const submitLead = async () => {
+
+    if (!name || !email || !phone) {
+      alert("Please fill all fields");
+      return;
+    }
 
     try {
 
@@ -282,6 +282,7 @@ function App() {
     } catch (err) {
 
       console.error("Lead submit error", err);
+      alert("Lead submission failed. Try again.");
 
     }
 
@@ -364,7 +365,9 @@ function App() {
         style={{ width: "100%", marginTop: 20 }}
       />
 
-      <button onClick={askQuestion}>Ask</button>
+      <button onClick={askQuestion} disabled={loading}>
+        Ask
+      </button>
 
       {/* Escalation */}
 
@@ -425,13 +428,20 @@ function App() {
 
       {leadSubmitted && (
 
-        <div style={{ marginTop: 20 }}>
+        <div
+          style={{
+            marginTop: 20,
+            padding: 15,
+            background: "#e8f5e9",
+            border: "1px solid #4caf50",
+            borderRadius: 6
+          }}
+        >
 
-          <h3>✅ A teacher will contact you shortly.</h3>
+          <h3>✅ A teacher will contact you within 24 hours</h3>
 
           <p>
-            You can continue learning while waiting.
-            Ask another question in the ask box.
+            You can continue chatting while waiting.
           </p>
 
         </div>

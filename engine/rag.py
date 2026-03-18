@@ -4,6 +4,7 @@ from chromadb.config import Settings
 from services.logging_service import LoggingService
 from langchain_openai import OpenAIEmbeddings
 
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CHROMA_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "chroma_db"))
 
@@ -15,32 +16,66 @@ DISTANCE_THRESHOLD = float(os.getenv("RAG_DISTANCE_THRESHOLD", "0.35"))
 # max chunks returned to agent
 MAX_CHUNKS = int(os.getenv("RAG_MAX_CHUNKS", "5"))
 
+
 class ChromaRAGStore:
+
     def __init__(self):
+
         os.makedirs(CHROMA_DIR, exist_ok=True)
+
+        self.logger = LoggingService()
+
+        # -------- Chroma Client --------
 
         self.client = chromadb.PersistentClient(
             path=CHROMA_DIR,
             settings=Settings(anonymized_telemetry=False)
         )
 
-        self.logger = LoggingService()
+        # -------- Embedding Model --------
 
-        self.embedder = OpenAIEmbeddings(
-            model="text-embedding-3-small"
-        )
+        try:
+            self.embedder = OpenAIEmbeddings(
+                model="text-embedding-3-small"
+            )
+        except Exception as e:
+            self.logger.log("EMBEDDING_INIT_ERROR", str(e))
+            raise e
 
-        self.collection = self.client.get_or_create_collection(
-            name=COLLECTION_NAME,
-            metadata={"hnsw:space": "cosine"}
-        )
+        # -------- Collection --------
 
-    def search(self, query, subject, chapter=None, k=5):
+        try:
+            self.collection = self.client.get_or_create_collection(
+                name=COLLECTION_NAME,
+                metadata={"hnsw:space": "cosine"}
+            )
+        except Exception as e:
+            self.logger.log("CHROMA_COLLECTION_ERROR", str(e))
+            raise e
+
+
+    # =====================================================
+    # SEARCH
+    # =====================================================
+
+    def search(self, query, subject, chapter=None, k=None):
+
         if not query or not subject:
             return []
 
+        if not k:
+            k = MAX_CHUNKS
+
         try:
+
             query_embedding = self.embedder.embed_query(query)
+
+        except Exception as e:
+
+            self.logger.log("EMBEDDING_FAILURE", str(e))
+            return []
+
+        try:
 
             where_filter = {"subject": subject}
 
@@ -55,6 +90,7 @@ class ChromaRAGStore:
             )
 
         except Exception as e:
+
             self.logger.log("RAG_QUERY_FAILURE", str(e))
             return []
 
@@ -62,21 +98,25 @@ class ChromaRAGStore:
         distances = res.get("distances")
 
         if not documents or not documents[0]:
+
             self.logger.log("RAG_EMPTY_RESULT", {
                 "query": query[:80],
                 "subject": subject,
                 "chapter": chapter
             })
+
             return []
 
         docs = documents[0]
         dists = distances[0] if distances else []
 
-        # filter weak semantic matches
         filtered_docs = []
 
         for doc, dist in zip(docs, dists):
-            if dist <= DISTANCE_THRESHOLD:
+
+            # semantic filtering
+            if dist is not None and dist <= DISTANCE_THRESHOLD:
+
                 filtered_docs.append(doc)
 
         # enforce max chunk limit

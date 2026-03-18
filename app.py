@@ -24,7 +24,6 @@ from capture_lead import capture_lead
 # ====================================
 
 app = Flask(__name__)
-
 CORS(app)
 
 logger = LoggingService()
@@ -35,7 +34,7 @@ logger = LoggingService()
 # ====================================
 
 limiter = Limiter(
-    get_remote_address,
+    key_func=get_remote_address,
     app=app,
     default_limits=["100 per hour"]
 )
@@ -47,17 +46,25 @@ print("\nStarting CurioNest Backend\n")
 # LOAD CORE SERVICES
 # ====================================
 
-rag_store = ChromaRAGStore()
+try:
 
-session_memory = SessionMemoryService()
+    rag_store = ChromaRAGStore()
 
-agent = StudentSupportAgentV5(
-    rag_store=rag_store,
-    session_engine=session_memory
-)
+    session_memory = SessionMemoryService()
 
-print("Vector DB Loaded")
-print("Agent V5 Initialized\n")
+    agent = StudentSupportAgentV5(
+        rag_store=rag_store,
+        session_engine=session_memory
+    )
+
+    print("Vector DB Loaded")
+    print("Agent V5 Initialized\n")
+
+except Exception as e:
+
+    print("\nSYSTEM STARTUP ERROR\n")
+    traceback.print_exc()
+    raise e
 
 
 # ====================================
@@ -188,7 +195,8 @@ def ask_question():
                 "message": "No question provided"
             }), 400
 
-        # Normalize
+        # ---------------- NORMALIZE INPUT ----------------
+
         board = board.strip().lower()
         subject = subject.strip().lower()
         chapter = chapter.strip().lower()
@@ -207,6 +215,8 @@ def ask_question():
             "question": question[:120]
         })
 
+        # ---------------- AGENT PROCESSING ----------------
+
         response = agent.receive_question(
             question=question,
             context=context,
@@ -224,7 +234,7 @@ def ask_question():
 
         return jsonify({
             "type": "error",
-            "message": "Internal server error processing question."
+            "message": "System temporarily unavailable."
         }), 500
 
 
