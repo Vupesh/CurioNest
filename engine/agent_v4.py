@@ -29,7 +29,6 @@ ESCALATION_COOLDOWN = int(os.getenv("ESCALATION_COOLDOWN", "3"))
 # ================= UTILITIES =================
 
 def normalize_latex(text: str):
-
     if not text:
         return text
 
@@ -52,9 +51,7 @@ def normalize_latex(text: str):
 
 
 def safe_json_parse(response_content: str, default: Dict):
-
     try:
-
         cleaned = re.sub(
             r"^```json\s*", "", response_content.strip(), flags=re.IGNORECASE
         )
@@ -64,9 +61,7 @@ def safe_json_parse(response_content: str, default: Dict):
         return json.loads(cleaned)
 
     except Exception:
-
         logging.error("JSON parse failure", exc_info=True)
-
         return default
 
 
@@ -75,9 +70,7 @@ def safe_json_parse(response_content: str, default: Dict):
 # ============================================================
 
 class StudentSupportAgentV5:
-
     def __init__(self, rag_store, session_engine=None):
-
         self.rag_store = rag_store
         self.session_engine = session_engine
 
@@ -99,23 +92,23 @@ class StudentSupportAgentV5:
     # =====================================================
 
     def receive_question(self, question: str, context: Dict[str, str], session_id="default"):
-
         subject = context.get("subject")
         chapter = context.get("chapter")
 
         # -------- Subject Guard --------
-
         subject_check = self.detect_subject_mismatch(question, subject)
 
         if not subject_check.get("match", True):
+            detected = subject_check.get("detected_subject")
+            if not detected:
+                detected = "another subject"
 
             return {
                 "type": "answer",
-                "message": f"This question appears related to {subject_check.get('detected_subject','another subject')}. Please change the subject to get the correct explanation."
+                "message": f"This question appears related to {detected}. Please change the subject to get the correct explanation."
             }
 
         # -------- Analysis --------
-
         analysis = self.analyze_question(question)
 
         intent = analysis["intent"]
@@ -124,13 +117,9 @@ class StudentSupportAgentV5:
         signals = analysis["signals"]
 
         # -------- RAG Retrieval --------
-
         try:
-
             chunks = self.rag_store.search(question, subject, chapter)
-
         except Exception as e:
-
             self.logger.log("RAG_ERROR", str(e))
             chunks = []
 
@@ -142,7 +131,6 @@ class StudentSupportAgentV5:
             context_quality = self.evaluate_context_quality(question, chunks)
 
         # -------- Escalation Decision --------
-
         decision = self.compute_escalation(
             intent,
             difficulty,
@@ -154,7 +142,6 @@ class StudentSupportAgentV5:
         )
 
         if decision == "ESCALATE":
-
             return self.escalate(
                 question,
                 subject,
@@ -166,7 +153,6 @@ class StudentSupportAgentV5:
             )
 
         # -------- AI Response --------
-
         if coverage > 0:
             return self.explain_with_ai(question, chunks)
 
@@ -177,7 +163,6 @@ class StudentSupportAgentV5:
     # =====================================================
 
     def detect_subject_mismatch(self, question, subject):
-
         prompt = f"""
 Determine if the question belongs to the subject: {subject}
 
@@ -191,7 +176,6 @@ Question:
 """
 
         try:
-
             res = self.client.chat.completions.create(
                 model=OPENAI_MODEL,
                 temperature=0,
@@ -207,7 +191,6 @@ Question:
             return data
 
         except Exception:
-
             return {"match": True}
 
     # =====================================================
@@ -215,7 +198,6 @@ Question:
     # =====================================================
 
     def analyze_question(self, question: str):
-
         prompt = f"""
 Analyze the student question.
 
@@ -250,7 +232,6 @@ Question:
         }
 
         try:
-
             response = self.client.chat.completions.create(
                 model=OPENAI_MODEL,
                 temperature=0,
@@ -280,15 +261,22 @@ Question:
             }
 
         except Exception:
-
-            return default
+            return {
+                "intent": default["intent"],
+                "difficulty": default["difficulty"],
+                "confidence": default["confidence"],
+                "signals": {
+                    "signals": default["signals"],
+                    "strength": default["signal_strength"],
+                    "summary": default["summary"]
+                }
+            }
 
     # =====================================================
     # CONTEXT QUALITY
     # =====================================================
 
     def evaluate_context_quality(self, question: str, chunks: List[str]):
-
         content = "\n\n".join(chunks[:3])
 
         prompt = f"""
@@ -309,7 +297,6 @@ Context:
         default = {"quality": "PARTIAL"}
 
         try:
-
             res = self.client.chat.completions.create(
                 model=OPENAI_MODEL,
                 temperature=0,
@@ -325,7 +312,6 @@ Context:
             return data.get("quality", "PARTIAL")
 
         except Exception:
-
             return "PARTIAL"
 
     # =====================================================
@@ -333,7 +319,6 @@ Context:
     # =====================================================
 
     def compute_escalation(self, intent, difficulty, confidence, signals, coverage, context_quality, session_id):
-
         if intent in ["CONCEPT_LEARNING", "GENERAL"]:
             return "RESPOND"
 
@@ -352,7 +337,6 @@ Context:
             return "RESPOND"
 
         if score >= ESCALATION_THRESHOLD:
-
             self.session_escalations[session_id] = recent + 1
             return "ESCALATE"
 
@@ -363,7 +347,6 @@ Context:
     # =====================================================
 
     def explain_with_ai(self, question: str, chunks: List[str]):
-
         content = "\n\n".join(chunks)
 
         prompt = f"""
@@ -404,7 +387,6 @@ Example (simple example)
     # =====================================================
 
     def explain_without_context(self, question: str):
-
         res = self.client.chat.completions.create(
             model=OPENAI_MODEL,
             max_tokens=EXPLAIN_MAX_TOKENS,
@@ -425,7 +407,6 @@ Example (simple example)
     # =====================================================
 
     def escalate(self, question, subject, chapter, reason, code, session_id, confidence):
-
         self.lead_persistence.upsert_lead(
             session_id=session_id,
             subject=subject,
