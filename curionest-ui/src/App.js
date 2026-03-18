@@ -380,15 +380,35 @@ function App() {
 
       </div>
 
-      {loading && <p>Thinking...</p>}
+      {loading && (
+        <div style={{ marginTop: 10, color: "#777" }}>
+          🤖 Thinking about your question...
+        </div>
+      )}
 
       <textarea
         ref={inputRef}
         value={question}
         onChange={(e) => setQuestion(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            askQuestion();
+          }
+        }}
         rows={3}
-        style={{ width: "100%", marginTop: 20 }}
+        style={{
+          width: "100%",
+          marginTop: 20,
+          padding: 10,
+          fontSize: 16
+        }}
+        placeholder="Ask anything from this chapter… e.g. Explain Ohm's Law, solve this numerical, or why photosynthesis happens."
       />
+
+      <div style={{ fontSize: 13, color: "#777", marginTop: 5 }}>
+        💡 Tip: Ask concepts, formulas, or numerical problems from this chapter.
+      </div>
 
       <button onClick={askQuestion} disabled={loading}>
         Ask
