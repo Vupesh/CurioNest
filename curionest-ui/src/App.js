@@ -29,6 +29,18 @@ const getSessionId = () => {
   }
 };
 
+/* -----------------------------
+Lead Validation
+----------------------------- */
+
+const validateEmail = (email) => {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+};
+
+const validatePhone = (phone) => {
+  return /^[0-9]{10}$/.test(phone);
+};
+
 function App() {
 
   const [config, setConfig] = useState(null);
@@ -186,7 +198,6 @@ function App() {
     const trimmedQuestion = question.trim();
 
     setShowEscalation(false);
-    setShowLeadForm(false);
 
     setMessages(prev => [
       ...prev,
@@ -256,8 +267,22 @@ function App() {
 
   const submitLead = async () => {
 
-    if (!name || !email || !phone) {
-      alert("Please fill all fields");
+    const cleanName = name.trim();
+    const cleanEmail = email.trim();
+    const cleanPhone = phone.trim();
+
+    if (!cleanName) {
+      alert("Please enter your name");
+      return;
+    }
+
+    if (!validateEmail(cleanEmail)) {
+      alert("Please enter a valid email");
+      return;
+    }
+
+    if (!validatePhone(cleanPhone)) {
+      alert("Please enter a valid 10 digit mobile number");
       return;
     }
 
@@ -266,15 +291,14 @@ function App() {
       await axios.post(`${API_BASE}/capture-lead`, {
 
         session_id: getSessionId(),
-        name,
-        email,
-        phone
+        name: cleanName,
+        email: cleanEmail,
+        phone: cleanPhone
 
       });
 
       setLeadSubmitted(true);
       setShowLeadForm(false);
-      setShowEscalation(false);
 
       setName("");
       setEmail("");
@@ -283,7 +307,7 @@ function App() {
     } catch (err) {
 
       console.error("Lead submit error", err);
-      alert("Lead submission failed. Try again.");
+      alert("Lead submission failed. Please try again.");
 
     }
 
@@ -408,15 +432,18 @@ function App() {
           />
 
           <input
+            type="email"
             placeholder="Email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
           />
 
           <input
-            placeholder="Phone"
+            type="tel"
+            placeholder="Mobile Number"
             value={phone}
-            onChange={(e) => setPhone(e.target.value)}
+            onChange={(e) => setPhone(e.target.value.replace(/\D/g, ""))}
+            maxLength={10}
           />
 
           <button onClick={submitLead}>Submit</button>
