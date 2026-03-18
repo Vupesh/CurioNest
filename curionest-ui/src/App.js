@@ -146,6 +146,7 @@ function App() {
     setBoard(newBoard);
 
     const newSubjects = Object.keys(config.education[newBoard]);
+
     const firstSubject = newSubjects[0];
 
     setSubject(firstSubject);
