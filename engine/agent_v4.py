@@ -28,18 +28,21 @@ ESCALATION_COOLDOWN = int(os.getenv("ESCALATION_COOLDOWN", "3"))
 
 # ================= UTILITIES =================
 
-def normalize_latex(text: str) -> str:
+def normalize_latex(text: str):
 
     if not text:
         return text
 
-    # convert \( ... \) → $ ... $
+    # convert \( ... \) → $...$
     text = re.sub(r"\\\((.*?)\\\)", r"$\1$", text)
 
-    # convert \[ ... \] → $$ ... $$
+    # convert \[ ... \] → $$...$$
     text = re.sub(r"\\\[(.*?)\\\]", r"$$\1$$", text)
 
-    # fix multi-line equations
+    # convert [ equation ] → $$ equation $$
+    text = re.sub(r"\[(.*?)\]", r"$$\1$$", text)
+
+    # fix multi line math
     text = re.sub(r"\n\s*\n", "\n\n", text)
 
     # remove OCR garbage
@@ -48,13 +51,22 @@ def normalize_latex(text: str) -> str:
     return text.strip()
 
 
-def safe_json_parse(response_content: str, default: Dict) -> Dict:
+def safe_json_parse(response_content: str, default: Dict):
+
     try:
-        cleaned = re.sub(r"^```json\s*", "", response_content.strip(), flags=re.IGNORECASE)
+
+        cleaned = re.sub(
+            r"^```json\s*", "", response_content.strip(), flags=re.IGNORECASE
+        )
+
         cleaned = re.sub(r"\s*```$", "", cleaned)
+
         return json.loads(cleaned)
+
     except Exception:
+
         logging.error("JSON parse failure", exc_info=True)
+
         return default
 
 
@@ -80,17 +92,29 @@ class StudentSupportAgentV5:
         self.lead_persistence = LeadPersistenceService()
         self.economics_engine = EscalationEconomicsEngine()
 
-        # session escalation memory
         self.session_escalations = {}
 
     # =====================================================
     # ENTRY POINT
     # =====================================================
 
-    def receive_question(self, question: str, context: Dict[str, str], session_id: str = "default") -> Dict[str, Any]:
+    def receive_question(self, question: str, context: Dict[str, str], session_id="default"):
 
         subject = context.get("subject")
         chapter = context.get("chapter")
+
+        # -------- Subject Guard --------
+
+        subject_check = self.detect_subject_mismatch(question, subject)
+
+        if not subject_check.get("match", True):
+
+            return {
+                "type": "answer",
+                "message": f"This question appears related to {subject_check.get('detected_subject','another subject')}. Please change the subject to get the correct explanation."
+            }
+
+        # -------- Analysis --------
 
         analysis = self.analyze_question(question)
 
@@ -99,9 +123,14 @@ class StudentSupportAgentV5:
         confidence = analysis["confidence"]
         signals = analysis["signals"]
 
+        # -------- RAG Retrieval --------
+
         try:
+
             chunks = self.rag_store.search(question, subject, chapter)
+
         except Exception as e:
+
             self.logger.log("RAG_ERROR", str(e))
             chunks = []
 
@@ -111,6 +140,8 @@ class StudentSupportAgentV5:
 
         if coverage >= MIN_COVERAGE:
             context_quality = self.evaluate_context_quality(question, chunks)
+
+        # -------- Escalation Decision --------
 
         decision = self.compute_escalation(
             intent,
@@ -123,6 +154,7 @@ class StudentSupportAgentV5:
         )
 
         if decision == "ESCALATE":
+
             return self.escalate(
                 question,
                 subject,
@@ -133,18 +165,56 @@ class StudentSupportAgentV5:
                 confidence
             )
 
+        # -------- AI Response --------
+
         if coverage > 0:
             return self.explain_with_ai(question, chunks)
 
-        self.logger.log("RAG_FALLBACK", {"question": question})
-
         return self.explain_without_context(question)
+
+    # =====================================================
+    # SUBJECT DETECTOR
+    # =====================================================
+
+    def detect_subject_mismatch(self, question, subject):
+
+        prompt = f"""
+Determine if the question belongs to the subject: {subject}
+
+Return JSON
+
+match: true or false
+detected_subject: short subject name
+
+Question:
+{question}
+"""
+
+        try:
+
+            res = self.client.chat.completions.create(
+                model=OPENAI_MODEL,
+                temperature=0,
+                max_tokens=50,
+                messages=[
+                    {"role": "system", "content": "Return JSON only"},
+                    {"role": "user", "content": prompt}
+                ]
+            )
+
+            data = safe_json_parse(res.choices[0].message.content, {"match": True})
+
+            return data
+
+        except Exception:
+
+            return {"match": True}
 
     # =====================================================
     # QUESTION ANALYSIS
     # =====================================================
 
-    def analyze_question(self, question: str) -> Dict[str, Any]:
+    def analyze_question(self, question: str):
 
         prompt = f"""
 Analyze the student question.
@@ -186,7 +256,7 @@ Question:
                 temperature=0,
                 max_tokens=CLASSIFICATION_MAX_TOKENS,
                 messages=[
-                    {"role": "system", "content": "Return JSON only."},
+                    {"role": "system", "content": "Return JSON only"},
                     {"role": "user", "content": prompt}
                 ]
             )
@@ -211,29 +281,20 @@ Question:
 
         except Exception:
 
-            return {
-                "intent": default["intent"],
-                "difficulty": default["difficulty"],
-                "confidence": default["confidence"],
-                "signals": {
-                    "signals": default["signals"],
-                    "strength": default["signal_strength"],
-                    "summary": default["summary"]
-                }
-            }
+            return default
 
     # =====================================================
     # CONTEXT QUALITY
     # =====================================================
 
-    def evaluate_context_quality(self, question: str, chunks: List[str]) -> str:
+    def evaluate_context_quality(self, question: str, chunks: List[str]):
 
         content = "\n\n".join(chunks[:3])
 
         prompt = f"""
 Determine if the syllabus context is sufficient to answer the student's question.
 
-Return JSON only.
+Return JSON
 
 quality:
 ["STRONG","PARTIAL","WEAK"]
@@ -254,7 +315,7 @@ Context:
                 temperature=0,
                 max_tokens=80,
                 messages=[
-                    {"role": "system", "content": "Return JSON only."},
+                    {"role": "system", "content": "Return JSON only"},
                     {"role": "user", "content": prompt}
                 ]
             )
@@ -264,6 +325,7 @@ Context:
             return data.get("quality", "PARTIAL")
 
         except Exception:
+
             return "PARTIAL"
 
     # =====================================================
@@ -272,15 +334,8 @@ Context:
 
     def compute_escalation(self, intent, difficulty, confidence, signals, coverage, context_quality, session_id):
 
-        # ---------- Hard UX Rules ----------
-
         if intent in ["CONCEPT_LEARNING", "GENERAL"]:
             return "RESPOND"
-
-        if intent in ["HELP_REQUEST", "ADVANCED_TOPIC"]:
-            return "ESCALATE"
-
-        # ---------- Confusion Handling ----------
 
         score = signals.get("strength", 1)
 
@@ -289,15 +344,6 @@ Context:
 
         if context_quality == "WEAK":
             score += CONTEXT_WEAK_PENALTY
-
-        self.logger.log("ESCALATION_SIGNAL_SCORE", {
-            "score": score,
-            "intent": intent,
-            "coverage": coverage,
-            "context_quality": context_quality
-        })
-
-        # cooldown logic
 
         recent = self.session_escalations.get(session_id, 0)
 
@@ -308,7 +354,6 @@ Context:
         if score >= ESCALATION_THRESHOLD:
 
             self.session_escalations[session_id] = recent + 1
-
             return "ESCALATE"
 
         return "RESPOND"
@@ -330,11 +375,13 @@ Context:
 Question:
 {question}
 
-Answer format:
+Answer strictly in this format for a Class 10 student:
 
-Concept
-Formula
-Example
+Concept (2-3 sentences)
+
+Formula (if applicable)
+
+Example (simple example)
 """
 
         res = self.client.chat.completions.create(
