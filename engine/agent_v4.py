@@ -7,6 +7,7 @@ from openai import OpenAI
 
 from services.logging_service import LoggingService
 from engine.cache_engine import CacheEngine
+from engine.query_guardrail import QueryGuardrail
 from engine.lead_persistence import LeadPersistenceService
 
 
@@ -15,6 +16,10 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 CLASSIFICATION_MAX_TOKENS = 150
 ANSWER_MAX_TOKENS = 1000
 
+
+# ==========================================================
+# LATEX NORMALIZATION
+# ==========================================================
 
 def normalize_latex(text: str):
 
@@ -29,6 +34,10 @@ def normalize_latex(text: str):
     return text.strip()
 
 
+# ==========================================================
+# SAFE JSON PARSER
+# ==========================================================
+
 def safe_json_parse(content: str, default):
 
     try:
@@ -42,6 +51,10 @@ def safe_json_parse(content: str, default):
         return default
 
 
+# ==========================================================
+# AGENT
+# ==========================================================
+
 class StudentSupportAgentV5:
 
     def __init__(self, rag_store, session_engine=None):
@@ -53,12 +66,14 @@ class StudentSupportAgentV5:
 
         self.cache = CacheEngine()
 
+        self.guardrail = QueryGuardrail()
+
         self.lead_persistence = LeadPersistenceService()
 
         self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
     # =====================================================
-    # ENTRY POINT
+    # MAIN ENTRY
     # =====================================================
 
     def receive_question(self, question: str, context: Dict[str, str], session_id: str):
@@ -66,9 +81,31 @@ class StudentSupportAgentV5:
         subject = context.get("subject")
         chapter = context.get("chapter")
 
-        # ---------------------------------------------------
-        # 1 CACHE CHECK
-        # ---------------------------------------------------
+        # --------------------------------------------
+        # 1 GUARDRAIL
+        # --------------------------------------------
+
+        guard = self.guardrail.check(question)
+
+        if guard:
+
+            if guard["type"] == "smalltalk":
+
+                return {
+                    "type": "answer",
+                    "message": guard["message"]
+                }
+
+            if guard["type"] == "ignore":
+
+                return {
+                    "type": "answer",
+                    "message": "Please ask a clear academic question."
+                }
+
+        # --------------------------------------------
+        # 2 CACHE
+        # --------------------------------------------
 
         cached = self.cache.search_cache(question, subject)
 
@@ -81,56 +118,102 @@ class StudentSupportAgentV5:
                 "message": cached
             }
 
-        # ---------------------------------------------------
-        # 2 QUESTION ANALYSIS
-        # ---------------------------------------------------
+        # --------------------------------------------
+        # 3 MEMORY
+        # --------------------------------------------
+
+        conversation_history = []
+
+        if self.session_engine:
+
+            conversation_history = self.session_engine.get_recent_messages(
+                session_id,
+                limit=6
+            )
+
+            self.session_engine.store_message(
+                session_id,
+                "user",
+                question
+            )
+
+        # --------------------------------------------
+        # 4 AI INTENT ANALYSIS
+        # --------------------------------------------
 
         analysis = self.analyze_question(question)
 
         intent = analysis["intent"]
         difficulty = analysis["difficulty"]
 
-        # ---------------------------------------------------
-        # 3 RAG SEARCH
-        # ---------------------------------------------------
+        # --------------------------------------------
+        # 5 RAG SEARCH
+        # --------------------------------------------
 
         chunks = self.rag_store.search(question, subject, chapter)
 
         coverage = len(chunks)
 
-        # ---------------------------------------------------
-        # 4 DECISION ENGINE
-        # ---------------------------------------------------
+        # --------------------------------------------
+        # 6 ESCALATION DECISION
+        # --------------------------------------------
 
-        if coverage == 0:
+        if coverage == 0 and intent in ["HELP_REQUEST", "CONFUSION"]:
 
-            if intent in ["HELP_REQUEST", "CONFUSION"]:
+            return self.escalate(
+                question,
+                subject,
+                chapter,
+                session_id
+            )
 
-                return self.escalate(question, subject, chapter, session_id)
-
-        # ---------------------------------------------------
-        # 5 GENERATE ANSWER
-        # ---------------------------------------------------
+        # --------------------------------------------
+        # 7 ANSWER GENERATION
+        # --------------------------------------------
 
         if coverage > 0:
 
-            answer = self.answer_with_context(question, chunks)
+            answer = self.answer_with_context(
+                question,
+                chunks,
+                conversation_history
+            )
 
         else:
 
-            answer = self.answer_general(question)
+            answer = self.answer_general(
+                question,
+                conversation_history
+            )
 
-        # ---------------------------------------------------
-        # 6 STORE CACHE
-        # ---------------------------------------------------
+        # --------------------------------------------
+        # 8 STORE CACHE
+        # --------------------------------------------
 
         try:
 
-            self.cache.store_cache(question, answer, subject, chapter)
+            self.cache.store_cache(
+                question,
+                answer,
+                subject,
+                chapter
+            )
 
         except Exception as e:
 
             self.logger.log("CACHE_STORE_FAIL", str(e))
+
+        # --------------------------------------------
+        # 9 SAVE MEMORY
+        # --------------------------------------------
+
+        if self.session_engine:
+
+            self.session_engine.store_message(
+                session_id,
+                "assistant",
+                answer
+            )
 
         return {
             "type": "answer",
@@ -138,7 +221,7 @@ class StudentSupportAgentV5:
         }
 
     # =====================================================
-    # QUESTION ANALYSIS
+    # AI QUESTION ANALYSIS
     # =====================================================
 
     def analyze_question(self, question: str):
@@ -175,7 +258,10 @@ Question:
                 ]
             )
 
-            data = safe_json_parse(res.choices[0].message.content, default)
+            data = safe_json_parse(
+                res.choices[0].message.content,
+                default
+            )
 
             return data
 
@@ -187,9 +273,15 @@ Question:
     # RAG ANSWER
     # =====================================================
 
-    def answer_with_context(self, question: str, chunks: List[str]):
+    def answer_with_context(self, question, chunks, history):
 
         context_text = "\n\n".join(chunks)
+
+        messages = [
+            {"role": "system", "content": "You are a helpful school tutor"}
+        ]
+
+        messages.extend(history)
 
         prompt = f"""
 Use ONLY the syllabus context.
@@ -200,7 +292,7 @@ Context:
 Student Question:
 {question}
 
-Explain in simple exam ready format.
+Explain in exam ready format.
 
 Structure:
 
@@ -209,35 +301,49 @@ Formula
 Example
 """
 
-        res = self.client.chat.completions.create(
-            model=OPENAI_MODEL,
-            max_tokens=ANSWER_MAX_TOKENS,
-            temperature=0.3,
-            messages=[
-                {"role": "system", "content": "You are a helpful school tutor"},
-                {"role": "user", "content": prompt}
-            ]
-        )
-
-        return normalize_latex(res.choices[0].message.content)
-
-    # =====================================================
-    # FALLBACK
-    # =====================================================
-
-    def answer_general(self, question: str):
+        messages.append({
+            "role": "user",
+            "content": prompt
+        })
 
         res = self.client.chat.completions.create(
             model=OPENAI_MODEL,
             max_tokens=ANSWER_MAX_TOKENS,
             temperature=0.3,
-            messages=[
-                {"role": "system", "content": "You are a helpful tutor"},
-                {"role": "user", "content": question}
-            ]
+            messages=messages
         )
 
-        return normalize_latex(res.choices[0].message.content)
+        return normalize_latex(
+            res.choices[0].message.content
+        )
+
+    # =====================================================
+    # GENERAL ANSWER
+    # =====================================================
+
+    def answer_general(self, question, history):
+
+        messages = [
+            {"role": "system", "content": "You are a helpful tutor"}
+        ]
+
+        messages.extend(history)
+
+        messages.append({
+            "role": "user",
+            "content": question
+        })
+
+        res = self.client.chat.completions.create(
+            model=OPENAI_MODEL,
+            max_tokens=ANSWER_MAX_TOKENS,
+            temperature=0.3,
+            messages=messages
+        )
+
+        return normalize_latex(
+            res.choices[0].message.content
+        )
 
     # =====================================================
     # ESCALATION
@@ -251,7 +357,7 @@ Example
             chapter=chapter,
             question=question,
             escalation_code="ESC_LEARNING_SUPPORT",
-            escalation_reason="Student needs human help",
+            escalation_reason="Student requires expert help",
             confidence=0.7,
             engagement_score=0,
             intent_strength=0.7,
