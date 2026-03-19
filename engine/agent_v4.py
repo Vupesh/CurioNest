@@ -10,15 +10,7 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 
 def normalize_latex(text):
-    if not text:
-        return text
-
-    text = re.sub(r"\\\[(.*?)\\\]", r"\1", text)
-    text = re.sub(r"\\\((.*?)\\\)", r"\1", text)
-    text = re.sub(r"\\text\{(.*?)\}", r"\1", text)
-    text = re.sub(r"\s+", " ", text)
-
-    return text.strip()
+    return re.sub(r"\s+", " ", text).strip() if text else text
 
 
 class StudentSupportAgentV5:
@@ -38,7 +30,7 @@ class StudentSupportAgentV5:
         self.session_escalated = {}
 
     # ============================================
-    # MAIN ENTRY
+    # MAIN
     # ============================================
 
     def receive_question(self, question, context, session_id):
@@ -48,51 +40,56 @@ class StudentSupportAgentV5:
             subject = context.get("subject")
             chapter = context.get("chapter")
 
-            # ---------------- CACHE ----------------
+            # -------- SMART GUARDRAIL --------
+            guard = self._guardrail(question)
+            if guard:
+                return guard
+
+            # -------- CACHE --------
             cached = self.cache.lookup(question, subject, chapter)
             if cached:
                 return {"type": "answer", "message": cached}
 
+            # -------- MEMORY --------
+            history = []
             if self.session_engine:
                 self.session_engine.store_message(session_id, "user", question)
+                history = self.session_engine.get_recent_messages(session_id, 5)
 
-            # ---------------- INTENT ----------------
+            # -------- INTENT --------
             intent = self._intent(question)
 
-            # soft signal boost (NOT hard rules)
-            if self._soft_confusion_signal(question):
-                intent = "CONFUSION"
-
             is_numerical = bool(re.search(r"\d", question))
-
             count = self.session_confusion.get(session_id, 0)
 
-            # ---------------- CONFUSION TRACK ----------------
+            # -------- CONFUSION TRACK --------
             if intent == "CONFUSION":
                 count += 1
             elif intent == "NORMAL":
-                count = max(0, count - 1)  # gradual decay (human-like)
-            
+                count = max(0, count - 1)
+
             self.session_confusion[session_id] = count
 
-            # ---------------- ESCALATION ----------------
+            # -------- ESCALATION --------
             if not self.session_escalated.get(session_id):
 
-                if not is_numerical:
+                if not is_numerical and len(question) > 15:
 
                     if intent == "HELP":
-                        self.session_escalated[session_id] = True
-                        return self._escalate(question, subject, chapter, session_id)
+                        return self._trigger_escalation(question, subject, chapter, session_id)
 
                     if count >= 3:
-                        self.session_escalated[session_id] = True
-                        return self._escalate(question, subject, chapter, session_id)
+                        return self._trigger_escalation(question, subject, chapter, session_id)
 
-            # ---------------- ANSWER ----------------
-            if intent == "CONFUSION" and count >= 1:
-                answer = self._answer_with_recovery(question, subject, chapter)
+            # -------- ANSWER STRATEGY --------
+            if count == 0:
+                answer = self._answer(question, subject, chapter, history)
+
+            elif count == 1:
+                answer = self._answer_simplified(question, subject, chapter)
+
             else:
-                answer = self._answer(question, subject, chapter)
+                answer = self._answer_with_example(question, subject, chapter)
 
             answer = normalize_latex(answer)
 
@@ -105,34 +102,68 @@ class StudentSupportAgentV5:
 
         except Exception as e:
             self.logger.log("AGENT_ERROR", str(e))
-            return {
-                "type": "error",
-                "message": "System temporarily unavailable."
-            }
+            return {"type": "error", "message": "System temporarily unavailable."}
 
     # ============================================
-    # INTENT (AI FIRST)
+    # SMART GUARDRAIL (AI BASED)
+    # ============================================
+
+    def _guardrail(self, question):
+
+        prompt = f"""
+Classify this input:
+
+SMALLTALK → greeting, casual, emotional, irrelevant
+STUDY → actual academic question
+
+Input:
+{question}
+
+Return ONE word.
+"""
+
+        try:
+            res = self.client.chat.completions.create(
+                model=OPENAI_MODEL,
+                temperature=0,
+                max_tokens=3,
+                messages=[
+                    {"role": "system", "content": "Classifier"},
+                    {"role": "user", "content": prompt}
+                ]
+            )
+
+            result = res.choices[0].message.content.strip().upper()
+
+            if result == "SMALLTALK":
+                return {
+                    "type": "smalltalk",
+                    "message": "I’m here to help with your studies 😊 Ask me any question from your chapter."
+                }
+
+        except:
+            pass
+
+        return None
+
+    # ============================================
+    # INTENT
     # ============================================
 
     def _intent(self, question):
 
         prompt = f"""
-You are detecting student learning state.
+Classify intent:
 
-Classify into ONE:
+NORMAL / CONFUSION / HELP
 
-NORMAL → student asking or learning
-CONFUSION → student struggling or not understanding
-HELP → student wants teacher/tutor
-
-IMPORTANT:
-- Short phrases like "confused", "not sure", "didn't get it" = CONFUSION
-- Even broken English should be understood
+CONFUSION includes:
+- not understanding
+- asking to explain again
+- asking for examples
 
 Question:
 {question}
-
-Return ONLY one word.
 """
 
         try:
@@ -141,7 +172,7 @@ Return ONLY one word.
                 temperature=0,
                 max_tokens=5,
                 messages=[
-                    {"role": "system", "content": "Strict classifier."},
+                    {"role": "system", "content": "Strict classifier"},
                     {"role": "user", "content": prompt}
                 ]
             )
@@ -157,92 +188,77 @@ Return ONLY one word.
         return "NORMAL"
 
     # ============================================
-    # SOFT SIGNAL (NOT HARD CODING)
+    # ANSWERS
     # ============================================
 
-    def _soft_confusion_signal(self, q):
-        q = q.lower()
+    def _answer(self, question, subject, chapter, history):
 
-        # pattern-based (not strict keywords)
-        return (
-            len(q) < 25 and (
-                "confus" in q or
-                "not" in q and "understand" in q or
-                "clear" in q or
-                "again" in q
-            )
-        )
-
-    # ============================================
-    # ANSWER (RAG + GENERAL)
-    # ============================================
-
-    def _answer(self, question, subject, chapter):
-
-        try:
-            chunks = self.rag_store.search(question, subject, chapter)
-        except:
-            chunks = []
-
-        if chunks:
-            context = "".join(chunks)
-        else:
-            context = ""
+        context = self._get_context(question, subject, chapter)
 
         prompt = f"""
-You are a friendly teacher.
+Explain clearly like a teacher:
 
-Rules:
-- Be clear and simple
-- Do NOT change topic
-- Use relatable explanation
-- Avoid robotic tone
+- Definition
+- Key idea
+- Simple explanation
+
+Stay on topic.
+
+Question:
+{question}
 
 Context:
 {context}
-
-Question:
-{question}
 """
 
-        res = self.client.chat.completions.create(
-            model=OPENAI_MODEL,
-            temperature=0.4,
-            messages=[{"role": "user", "content": prompt}]
-        )
+        return self._llm(prompt)
 
-        return res.choices[0].message.content
-
-    # ============================================
-    # RECOVERY ANSWER (HUMAN-LIKE)
-    # ============================================
-
-    def _answer_with_recovery(self, question, subject, chapter):
+    def _answer_simplified(self, question, subject, chapter):
 
         prompt = f"""
-Student is confused.
-
-Re-explain more simply:
-- Use analogy
-- Break into steps
-- Be very clear
-- Sound human and supportive
+Explain very simply in 2-3 lines.
 
 Question:
 {question}
 """
+        return self._llm(prompt)
 
+    def _answer_with_example(self, question, subject, chapter):
+
+        prompt = f"""
+Explain with a simple example or numerical.
+
+Question:
+{question}
+"""
+        return self._llm(prompt)
+
+    # ============================================
+    # HELPERS
+    # ============================================
+
+    def _get_context(self, question, subject, chapter):
+        try:
+            chunks = self.rag_store.search(question, subject, chapter)
+            return "".join(chunks)
+        except:
+            return ""
+
+    def _llm(self, prompt):
         res = self.client.chat.completions.create(
             model=OPENAI_MODEL,
-            temperature=0.5,
+            temperature=0.3,
             messages=[{"role": "user", "content": prompt}]
         )
-
         return res.choices[0].message.content
 
     # ============================================
     # ESCALATION
     # ============================================
+
+    def _trigger_escalation(self, question, subject, chapter, session_id):
+        self.session_escalated[session_id] = True
+        return self._escalate(question, subject, chapter, session_id)
 
     def _escalate(self, question, subject, chapter, session_id):
 
@@ -264,5 +280,5 @@ Question:
 
         return {
             "type": "escalation",
-            "message": "It seems this topic needs personal guidance. A teacher can help you better."
+            "message": "Let me connect you with a teacher for better guidance."
         }
