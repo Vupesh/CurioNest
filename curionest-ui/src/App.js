@@ -4,6 +4,7 @@ import ReactMarkdown from "react-markdown";
 
 const API_BASE = process.env.REACT_APP_API_BASE || "http://127.0.0.1:5000";
 
+/* SESSION */
 const getSessionId = () => {
   let id = localStorage.getItem("curionest_session");
   if (!id) {
@@ -36,18 +37,19 @@ function App() {
 
   const chatEndRef = useRef(null);
 
-  // ---------------- SCROLL ----------------
+  /* SCROLL */
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // ---------------- LOAD CONFIG ----------------
+  /* LOAD CONFIG */
   useEffect(() => {
     axios.get(`${API_BASE}/domain-config`)
       .then(res => setConfig(res.data))
       .catch(() => alert("Failed to load config"));
   }, []);
 
+  /* DERIVED */
   const boards = config ? Object.keys(config.education || {}) : [];
 
   const subjects =
@@ -60,14 +62,7 @@ function App() {
       ? config.education[board][subject]
       : [];
 
-  // ---------------- HUMAN THINKING EFFECT ----------------
-  const simulateTyping = (text) => {
-    return new Promise(resolve => {
-      setTimeout(() => resolve(text), 500 + Math.random() * 800);
-    });
-  };
-
-  // ---------------- ASK QUESTION ----------------
+  /* ASK QUESTION */
   const askQuestion = useCallback(async () => {
 
     if (!question.trim()) return;
@@ -95,37 +90,29 @@ function App() {
 
       const result = res.data;
 
-      // ---------------- ESCALATION ----------------
+      /* ESCALATION */
       if (result.type === "escalation") {
-
-        const msg = await simulateTyping(result.message);
 
         setMessages(prev => [
           ...prev,
-          { role: "ai", text: msg }
+          { role: "ai", text: result.message }
         ]);
 
-        // delay CTA (feels human)
-        setTimeout(() => {
-          setShowEscalation(true);
-        }, 800);
-
+        setShowEscalation(true);
         return;
       }
 
-      // ---------------- NORMAL RESPONSE ----------------
-      const msg = await simulateTyping(result.message);
-
+      /* SMALLTALK / NORMAL */
       setMessages(prev => [
         ...prev,
-        { role: "ai", text: msg }
+        { role: "ai", text: result.message }
       ]);
 
     } catch {
 
       setMessages(prev => [
         ...prev,
-        { role: "ai", text: "Hmm… something went wrong. Try again." }
+        { role: "ai", text: "System temporarily unavailable." }
       ]);
 
     } finally {
@@ -134,7 +121,7 @@ function App() {
 
   }, [question, board, subject, chapter]);
 
-  // ---------------- ENTER SEND ----------------
+  /* ENTER SEND */
   const handleKeyDown = (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -142,14 +129,14 @@ function App() {
     }
   };
 
-  // ---------------- VALIDATION ----------------
+  /* VALIDATION */
   const isValidEmail = (email) =>
     /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 
   const isValidPhone = (phone) =>
     /^[6-9]\d{9}$/.test(phone);
 
-  // ---------------- SUBMIT LEAD ----------------
+  /* SUBMIT LEAD */
   const submitLead = async () => {
 
     if (!name || !isValidEmail(email) || !isValidPhone(phone)) {
@@ -172,6 +159,20 @@ function App() {
     } catch {
       alert("Failed to submit");
     }
+
+  };
+
+  /* USER REJECTS TEACHER */
+  const rejectTeacher = () => {
+    setShowEscalation(false);
+
+    setMessages(prev => [
+      ...prev,
+      {
+        role: "ai",
+        text: "No problem 👍 Let’s continue. Ask your doubt and I’ll help you."
+      }
+    ]);
   };
 
   return (
@@ -180,7 +181,6 @@ function App() {
       <h2>CurioNest</h2>
 
       {/* DROPDOWNS */}
-
       <select value={board} onChange={(e) => {
         setBoard(e.target.value);
         setSubject("");
@@ -204,7 +204,6 @@ function App() {
       </select>
 
       {/* CHAT */}
-
       <div style={{ marginTop: 20 }}>
 
         {messages.map((m, i) => (
@@ -215,8 +214,8 @@ function App() {
             <div style={{
               display: "inline-block",
               padding: 12,
-              background: m.role === "user" ? "#DCF8C6" : "#f1f1f1",
-              borderRadius: 12,
+              background: m.role === "user" ? "#DCF8C6" : "#eee",
+              borderRadius: 10,
               maxWidth: "75%"
             }}>
               <ReactMarkdown>{m.text}</ReactMarkdown>
@@ -227,12 +226,11 @@ function App() {
         <div ref={chatEndRef} />
       </div>
 
-      {loading && <p>Thinking…</p>}
+      {loading && <p>Thinking...</p>}
 
       {/* INPUT */}
-
       <textarea
-        placeholder="Ask your question clearly... (Enter to send)"
+        placeholder="Ask your question clearly..."
         value={question}
         onChange={(e) => setQuestion(e.target.value)}
         onKeyDown={handleKeyDown}
@@ -243,24 +241,19 @@ function App() {
       <button onClick={askQuestion}>Ask</button>
 
       {/* ESCALATION */}
-
       {showEscalation && !showLeadForm && (
-        <div style={{
-          marginTop: 20,
-          padding: 20,
-          border: "2px solid #ffa500",
-          borderRadius: 10
-        }}>
+        <div style={{ marginTop: 20, padding: 20, border: "2px solid orange" }}>
           <h3>Want help from a real teacher?</h3>
-          <p>This topic can be easier with personal guidance.</p>
           <button onClick={() => setShowLeadForm(true)}>
             Talk to a Teacher
+          </button>
+          <button onClick={rejectTeacher} style={{ marginLeft: 10 }}>
+            Continue Here
           </button>
         </div>
       )}
 
       {/* LEAD FORM */}
-
       {showLeadForm && !leadSubmitted && (
         <div style={{ marginTop: 20 }}>
           <input placeholder="Name" value={name} onChange={(e) => setName(e.target.value)} />
@@ -271,11 +264,9 @@ function App() {
       )}
 
       {/* SUCCESS */}
-
       {leadSubmitted && (
         <div style={{ marginTop: 20 }}>
           <h3>✅ A teacher will contact you soon</h3>
-          <p>You can continue learning meanwhile.</p>
         </div>
       )}
 

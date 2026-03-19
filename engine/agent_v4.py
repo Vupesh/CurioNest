@@ -9,8 +9,19 @@ from engine.lead_persistence import LeadPersistenceService
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 
-def normalize_latex(text):
-    return re.sub(r"\s+", " ", text).strip() if text else text
+# ================= CLEAN (NO LATEX EVER) =================
+def clean(text):
+    if not text:
+        return text
+
+    text = re.sub(r"\\\[(.*?)\\\]", r"\1", text)
+    text = re.sub(r"\\\((.*?)\\\)", r"\1", text)
+    text = re.sub(r"\\frac\{(.*?)\}\{(.*?)\}", r"\1/\2", text)
+    text = re.sub(r"\\sqrt\{(.*?)\}", r"sqrt(\1)", text)
+    text = re.sub(r"\\[a-zA-Z]+", "", text)
+    text = re.sub(r"\s+", " ", text)
+
+    return text.strip()
 
 
 class StudentSupportAgentV5:
@@ -28,11 +39,9 @@ class StudentSupportAgentV5:
 
         self.session_confusion = {}
         self.session_escalated = {}
+        self.session_rejected = {}
 
-    # ============================================
-    # MAIN
-    # ============================================
-
+    # ================= MAIN =================
     def receive_question(self, question, context, session_id):
 
         try:
@@ -40,29 +49,35 @@ class StudentSupportAgentV5:
             subject = context.get("subject")
             chapter = context.get("chapter")
 
-            # -------- SMART GUARDRAIL --------
-            guard = self._guardrail(question)
-            if guard:
-                return guard
+            # ---------- SMALL TALK ----------
+            if self._is_smalltalk(question):
+                return {
+                    "type": "smalltalk",
+                    "message": "Ask me anything from your chapter 😊"
+                }
 
-            # -------- CACHE --------
+            # ---------- CACHE ----------
             cached = self.cache.lookup(question, subject, chapter)
             if cached:
                 return {"type": "answer", "message": cached}
 
-            # -------- MEMORY --------
-            history = []
-            if self.session_engine:
-                self.session_engine.store_message(session_id, "user", question)
-                history = self.session_engine.get_recent_messages(session_id, 5)
-
-            # -------- INTENT --------
+            # ---------- INTENT ----------
             intent = self._intent(question)
 
-            is_numerical = bool(re.search(r"\d", question))
+            # ---------- DIRECT HELP ----------
+            if intent == "HELP":
+                return self._escalate(question, subject, chapter, session_id)
+
+            # ---------- EMOTIONAL ----------
+            if intent == "EMOTIONAL":
+                return {
+                    "type": "answer",
+                    "message": "You’ll do fine 👍 Focus on concepts step by step. I’m here to help."
+                }
+
+            # ---------- CONFUSION TRACK ----------
             count = self.session_confusion.get(session_id, 0)
 
-            # -------- CONFUSION TRACK --------
             if intent == "CONFUSION":
                 count += 1
             elif intent == "NORMAL":
@@ -70,100 +85,52 @@ class StudentSupportAgentV5:
 
             self.session_confusion[session_id] = count
 
-            # -------- ESCALATION --------
+            # ---------- ESCALATION ----------
             if not self.session_escalated.get(session_id):
+                if count >= 3:
+                    return self._escalate(question, subject, chapter, session_id)
 
-                if not is_numerical and len(question) > 15:
-
-                    if intent == "HELP":
-                        return self._trigger_escalation(question, subject, chapter, session_id)
-
-                    if count >= 3:
-                        return self._trigger_escalation(question, subject, chapter, session_id)
-
-            # -------- ANSWER STRATEGY --------
+            # ---------- ANSWER STRATEGY ----------
             if count == 0:
-                answer = self._answer(question, subject, chapter, history)
+                answer = self._answer(question, subject, chapter)
 
             elif count == 1:
-                answer = self._answer_simplified(question, subject, chapter)
+                answer = self._simplify(question, subject, chapter)
 
             else:
-                answer = self._answer_with_example(question, subject, chapter)
+                answer = self._example(question, subject, chapter)
 
-            answer = normalize_latex(answer)
+            answer = clean(answer)
 
             self.cache.store(question, subject, chapter, answer)
-
-            if self.session_engine:
-                self.session_engine.store_message(session_id, "assistant", answer)
 
             return {"type": "answer", "message": answer}
 
         except Exception as e:
             self.logger.log("AGENT_ERROR", str(e))
-            return {"type": "error", "message": "System temporarily unavailable."}
+            return {"type": "error", "message": "System error."}
 
-    # ============================================
-    # SMART GUARDRAIL (AI BASED)
-    # ============================================
-
-    def _guardrail(self, question):
-
-        prompt = f"""
-Classify this input:
-
-SMALLTALK → greeting, casual, emotional, irrelevant
-STUDY → actual academic question
-
-Input:
-{question}
-
-Return ONE word.
-"""
-
-        try:
-            res = self.client.chat.completions.create(
-                model=OPENAI_MODEL,
-                temperature=0,
-                max_tokens=3,
-                messages=[
-                    {"role": "system", "content": "Classifier"},
-                    {"role": "user", "content": prompt}
-                ]
-            )
-
-            result = res.choices[0].message.content.strip().upper()
-
-            if result == "SMALLTALK":
-                return {
-                    "type": "smalltalk",
-                    "message": "I’m here to help with your studies 😊 Ask me any question from your chapter."
-                }
-
-        except:
-            pass
-
-        return None
-
-    # ============================================
-    # INTENT
-    # ============================================
-
+    # ================= INTENT =================
     def _intent(self, question):
 
         prompt = f"""
-Classify intent:
+Classify:
 
-NORMAL / CONFUSION / HELP
+NORMAL → valid academic question
+CONFUSION → student not understanding
+HELP → wants teacher
+EMOTIONAL → pass/fail, fear, feelings
 
-CONFUSION includes:
-- not understanding
-- asking to explain again
-- asking for examples
+IMPORTANT:
+- "Explain more" = NORMAL
+- "Explain with example" = NORMAL
+- "I don’t understand" = CONFUSION
+- "talk to teacher" = HELP
 
 Question:
 {question}
+
+Return one word.
 """
 
         try:
@@ -171,76 +138,65 @@ Question:
                 model=OPENAI_MODEL,
                 temperature=0,
                 max_tokens=5,
-                messages=[
-                    {"role": "system", "content": "Strict classifier"},
-                    {"role": "user", "content": prompt}
-                ]
+                messages=[{"role": "user", "content": prompt}]
             )
 
-            intent = res.choices[0].message.content.strip().upper()
+            out = res.choices[0].message.content.strip().upper()
 
-            if intent in ["NORMAL", "CONFUSION", "HELP"]:
-                return intent
+            if out in ["NORMAL", "CONFUSION", "HELP", "EMOTIONAL"]:
+                return out
 
         except:
             pass
 
         return "NORMAL"
 
-    # ============================================
-    # ANSWERS
-    # ============================================
+    # ================= ANSWER =================
+    def _answer(self, q, subject, chapter):
 
-    def _answer(self, question, subject, chapter, history):
-
-        context = self._get_context(question, subject, chapter)
+        context = self._context(q, subject, chapter)
 
         prompt = f"""
-Explain clearly like a teacher:
+You are teaching {subject}.
 
-- Definition
-- Key idea
-- Simple explanation
+STRICT RULES:
+- Answer ONLY related to {subject}
+- If unrelated → say "Please ask from this chapter"
+- NO LATEX
 
-Stay on topic.
+Explain:
+1. Definition
+2. Key idea
+3. Simple explanation
 
-Question:
-{question}
-
-Context:
-{context}
+Question: {q}
+Context: {context}
 """
 
         return self._llm(prompt)
 
-    def _answer_simplified(self, question, subject, chapter):
+    def _simplify(self, q, subject, chapter):
 
-        prompt = f"""
-Explain very simply in 2-3 lines.
+        return self._llm(f"""
+Explain in very simple words (2 lines).
+NO LATEX.
 
-Question:
-{question}
-"""
-        return self._llm(prompt)
+Question: {q}
+""")
 
-    def _answer_with_example(self, question, subject, chapter):
+    def _example(self, q, subject, chapter):
 
-        prompt = f"""
+        return self._llm(f"""
 Explain with a simple example or numerical.
+NO LATEX.
 
-Question:
-{question}
-"""
-        return self._llm(prompt)
+Question: {q}
+""")
 
-    # ============================================
-    # HELPERS
-    # ============================================
-
-    def _get_context(self, question, subject, chapter):
+    # ================= HELPERS =================
+    def _context(self, q, s, c):
         try:
-            chunks = self.rag_store.search(question, subject, chapter)
-            return "".join(chunks)
+            return "".join(self.rag_store.search(q, s, c))
         except:
             return ""
 
@@ -252,33 +208,31 @@ Question:
         )
         return res.choices[0].message.content
 
-    # ============================================
-    # ESCALATION
-    # ============================================
+    def _is_smalltalk(self, q):
+        return len(q.strip()) < 8
 
-    def _trigger_escalation(self, question, subject, chapter, session_id):
-        self.session_escalated[session_id] = True
-        return self._escalate(question, subject, chapter, session_id)
+    # ================= ESCALATION =================
+    def _escalate(self, q, s, c, sid):
 
-    def _escalate(self, question, subject, chapter, session_id):
+        self.session_escalated[sid] = True
 
         try:
             self.lead_persistence.upsert_lead(
-                session_id=session_id,
-                subject=subject,
-                chapter=chapter,
-                question=question,
+                session_id=sid,
+                subject=s,
+                chapter=c,
+                question=q,
                 escalation_code="ESC",
                 escalation_reason="student_struggling",
-                confidence=0.85,
+                confidence=0.9,
                 engagement_score=0,
-                intent_strength=0.85,
+                intent_strength=0.9,
                 status="NEW"
             )
-        except Exception as e:
-            self.logger.log("ESCALATION_DB_FAIL", str(e))
+        except:
+            pass
 
         return {
             "type": "escalation",
-            "message": "Let me connect you with a teacher for better guidance."
+            "message": "This topic can be easier with personal guidance."
         }
