@@ -16,11 +16,15 @@ def normalize_latex(text: str) -> str:
     if not text:
         return text
 
-    text = re.sub(r"\\\((.*?)\\\)", r"$\1$", text)
-    text = re.sub(r"\\\[(.*?)\\\]", r"$$\1$$", text)
-
-    text = text.replace("$$$$", "$$")
+    # Fix broken brackets
     text = text.replace("\\", "\\\\")
+    text = text.replace("$$$$", "$$")
+
+    # Convert [ ... ] → $$ ... $$
+    text = re.sub(r"\[\s*(.*?)\s*\]", r"$$\1$$", text)
+
+    # Remove broken trailing slashes
+    text = re.sub(r"\\\s*$", "", text)
 
     return text.strip()
 
