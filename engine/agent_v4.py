@@ -12,10 +12,13 @@ def normalize_latex(text):
     if not text:
         return text
 
-    text = re.sub(r"\\\[(.*?)\\\]", r"$$\1$$", text, flags=re.DOTALL)
-    text = re.sub(r"\\\((.*?)\\\)", r"$\1$", text, flags=re.DOTALL)
+    # Remove all latex wrappers
+    text = re.sub(r"\\\[(.*?)\\\]", r"\1", text)
+    text = re.sub(r"\\\((.*?)\\\)", r"\1", text)
     text = re.sub(r"\\text\{(.*?)\}", r"\1", text)
-    text = re.sub(r"\${3,}", "$$", text)
+
+    # Clean spacing
+    text = re.sub(r"\s+", " ", text)
 
     return text.strip()
 
@@ -38,7 +41,6 @@ class StudentSupportAgentV5:
     def receive_question(self, question, context, session_id):
 
         try:
-
             question = question.strip()
             subject = context.get("subject")
             chapter = context.get("chapter")
@@ -108,18 +110,24 @@ class StudentSupportAgentV5:
     def _answer_rag(self, question, chunks):
 
         prompt = f"""
-Use context:
+Explain clearly like a teacher.
 
+Rules:
+- Use simple equations (F = m × a)
+- Do NOT use LaTeX syntax
+- Keep it clean and readable
+
+Context:
 {''.join(chunks)}
 
-Answer simply.
-Use $$ for formulas only.
+Question:
+{question}
 """
 
         res = self.client.chat.completions.create(
             model=OPENAI_MODEL,
             temperature=0.3,
-            messages=[{"role": "user", "content": prompt + question}]
+            messages=[{"role": "user", "content": prompt}]
         )
 
         return res.choices[0].message.content
@@ -127,14 +135,21 @@ Use $$ for formulas only.
     def _answer_general(self, question):
 
         prompt = f"""
-Answer clearly.
-Use $$ for formulas only.
+Explain clearly like a teacher.
+
+Rules:
+- Use simple equations (KE = 1/2 mv^2)
+- Do NOT use LaTeX syntax
+- Keep it clean
+
+Question:
+{question}
 """
 
         res = self.client.chat.completions.create(
             model=OPENAI_MODEL,
             temperature=0.3,
-            messages=[{"role": "user", "content": prompt + question}]
+            messages=[{"role": "user", "content": prompt}]
         )
 
         return res.choices[0].message.content
