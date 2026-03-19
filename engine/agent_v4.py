@@ -1,6 +1,7 @@
 import os
 import re
 from openai import OpenAI
+
 from engine.cache_engine import CacheEngine
 from services.logging_service import LoggingService
 from engine.lead_persistence import LeadPersistenceService
@@ -8,20 +9,25 @@ from engine.lead_persistence import LeadPersistenceService
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 
+# =============================
+# CLEAN OUTPUT (NO LATEX ISSUES)
+# =============================
+
 def normalize_latex(text):
     if not text:
         return text
 
-    # Remove all latex wrappers
     text = re.sub(r"\\\[(.*?)\\\]", r"\1", text)
     text = re.sub(r"\\\((.*?)\\\)", r"\1", text)
     text = re.sub(r"\\text\{(.*?)\}", r"\1", text)
-
-    # Clean spacing
     text = re.sub(r"\s+", " ", text)
 
     return text.strip()
 
+
+# =============================
+# AGENT
+# =============================
 
 class StudentSupportAgentV5:
 
@@ -29,14 +35,20 @@ class StudentSupportAgentV5:
 
         self.rag_store = rag_store
         self.session_engine = session_engine
+
         self.cache = CacheEngine()
         self.logger = LoggingService()
         self.lead_persistence = LeadPersistenceService()
 
         self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+        # session behavior tracking
         self.session_confusion = {}
         self.session_escalated = {}
+
+    # =============================
+    # ENTRY POINT
+    # =============================
 
     def receive_question(self, question, context, session_id):
 
@@ -45,24 +57,38 @@ class StudentSupportAgentV5:
             subject = context.get("subject")
             chapter = context.get("chapter")
 
-            # CACHE
+            # -------------------------
+            # CACHE (FAST PATH)
+            # -------------------------
             cached = self.cache.lookup(question, subject, chapter)
             if cached:
                 return {"type": "answer", "message": cached}
 
-            # MEMORY
+            # -------------------------
+            # SESSION MEMORY
+            # -------------------------
             if self.session_engine:
                 self.session_engine.store_message(session_id, "user", question)
 
+            # -------------------------
+            # AI INTENT DETECTION (FIXED)
+            # -------------------------
             intent = self._intent(question)
+
+            # detect numerical
             is_numerical = bool(re.search(r"\d", question))
 
+            # -------------------------
+            # RAG
+            # -------------------------
             try:
                 chunks = self.rag_store.search(question, subject, chapter)
             except:
                 chunks = []
 
-            # ESCALATION CONTROL
+            # -------------------------
+            # ESCALATION LOGIC
+            # -------------------------
             if not self.session_escalated.get(session_id):
 
                 count = self.session_confusion.get(session_id, 0)
@@ -71,17 +97,20 @@ class StudentSupportAgentV5:
                     count += 1
                     self.session_confusion[session_id] = count
 
+                # avoid numerical escalation
                 if not is_numerical:
 
                     if count >= 3:
                         self.session_escalated[session_id] = True
                         return self._escalate(question, subject, chapter, session_id)
 
-                    if "teacher" in question.lower():
+                    if intent == "HELP":
                         self.session_escalated[session_id] = True
                         return self._escalate(question, subject, chapter, session_id)
 
-            # ANSWER
+            # -------------------------
+            # ANSWER GENERATION
+            # -------------------------
             if chunks:
                 answer = self._answer_rag(question, chunks)
             else:
@@ -89,23 +118,78 @@ class StudentSupportAgentV5:
 
             answer = normalize_latex(answer)
 
+            # -------------------------
+            # CACHE STORE
+            # -------------------------
             self.cache.store(question, subject, chapter, answer)
 
+            # -------------------------
+            # SESSION MEMORY STORE
+            # -------------------------
             if self.session_engine:
                 self.session_engine.store_message(session_id, "assistant", answer)
 
             return {"type": "answer", "message": answer}
 
-        except:
-            return {"type": "error", "message": "System temporarily unavailable."}
+        except Exception as e:
 
-    def _intent(self, q):
-        q = q.lower()
-        if "confused" in q or "not understand" in q:
-            return "CONFUSION"
-        if "help" in q or "teacher" in q:
-            return "HELP"
-        return "NORMAL"
+            self.logger.log("AGENT_ERROR", str(e))
+
+            return {
+                "type": "error",
+                "message": "System temporarily unavailable."
+            }
+
+    # =============================
+    # AI INTENT (FINAL FIX)
+    # =============================
+
+    def _intent(self, question):
+
+        prompt = f"""
+Classify the student's intent.
+
+Return ONLY one word:
+
+NORMAL
+CONFUSION
+HELP
+
+Examples:
+"I don't understand this" → CONFUSION
+"Explain again please" → CONFUSION
+"Can a teacher help me?" → HELP
+"What is force?" → NORMAL
+
+Question:
+{question}
+"""
+
+        try:
+
+            res = self.client.chat.completions.create(
+                model=OPENAI_MODEL,
+                temperature=0,
+                max_tokens=5,
+                messages=[
+                    {"role": "system", "content": "Return only one word."},
+                    {"role": "user", "content": prompt}
+                ]
+            )
+
+            intent = res.choices[0].message.content.strip().upper()
+
+            if intent not in ["NORMAL", "CONFUSION", "HELP"]:
+                return "NORMAL"
+
+            return intent
+
+        except:
+            return "NORMAL"
+
+    # =============================
+    # RAG ANSWER
+    # =============================
 
     def _answer_rag(self, question, chunks):
 
@@ -114,8 +198,8 @@ Explain clearly like a teacher.
 
 Rules:
 - Use simple equations (F = m × a)
-- Do NOT use LaTeX syntax
-- Keep it clean and readable
+- DO NOT use LaTeX syntax
+- Keep answer structured and simple
 
 Context:
 {''.join(chunks)}
@@ -127,10 +211,16 @@ Question:
         res = self.client.chat.completions.create(
             model=OPENAI_MODEL,
             temperature=0.3,
-            messages=[{"role": "user", "content": prompt}]
+            messages=[
+                {"role": "user", "content": prompt}
+            ]
         )
 
         return res.choices[0].message.content
+
+    # =============================
+    # GENERAL ANSWER
+    # =============================
 
     def _answer_general(self, question):
 
@@ -139,8 +229,8 @@ Explain clearly like a teacher.
 
 Rules:
 - Use simple equations (KE = 1/2 mv^2)
-- Do NOT use LaTeX syntax
-- Keep it clean
+- DO NOT use LaTeX syntax
+- Keep it clean and beginner-friendly
 
 Question:
 {question}
@@ -149,10 +239,16 @@ Question:
         res = self.client.chat.completions.create(
             model=OPENAI_MODEL,
             temperature=0.3,
-            messages=[{"role": "user", "content": prompt}]
+            messages=[
+                {"role": "user", "content": prompt}
+            ]
         )
 
         return res.choices[0].message.content
+
+    # =============================
+    # ESCALATION
+    # =============================
 
     def _escalate(self, question, subject, chapter, session_id):
 
@@ -163,14 +259,14 @@ Question:
                 chapter=chapter,
                 question=question,
                 escalation_code="ESC",
-                escalation_reason="help_needed",
-                confidence=0.8,
+                escalation_reason="student_struggling",
+                confidence=0.85,
                 engagement_score=0,
-                intent_strength=0.8,
+                intent_strength=0.85,
                 status="NEW"
             )
-        except:
-            pass
+        except Exception as e:
+            self.logger.log("ESCALATION_DB_FAIL", str(e))
 
         return {
             "type": "escalation",
