@@ -1,30 +1,18 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import axios from "axios";
 import ReactMarkdown from "react-markdown";
-import remarkMath from "remark-math";
-import rehypeKatex from "rehype-katex";
-import "katex/dist/katex.min.css";
 
 const API_BASE = process.env.REACT_APP_API_BASE || "http://127.0.0.1:5000";
 
-/* =============================
-SESSION MANAGEMENT
-============================= */
 const getSessionId = () => {
   let id = localStorage.getItem("curionest_session");
   if (!id) {
-    id =
-      "sess_" +
-      Math.random().toString(36).substring(2) +
-      Date.now();
+    id = "sess_" + Math.random().toString(36).substring(2) + Date.now();
     localStorage.setItem("curionest_session", id);
   }
   return id;
 };
 
-/* =============================
-APP
-============================= */
 function App() {
 
   const [config, setConfig] = useState(null);
@@ -47,27 +35,19 @@ function App() {
   const [phone, setPhone] = useState("");
 
   const chatEndRef = useRef(null);
-  const inputRef = useRef(null);
 
-  /* -----------------------------
-  SCROLL
-  ----------------------------- */
+  // ---------------- SCROLL ----------------
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  /* -----------------------------
-  LOAD CONFIG
-  ----------------------------- */
+  // ---------------- LOAD CONFIG ----------------
   useEffect(() => {
     axios.get(`${API_BASE}/domain-config`)
       .then(res => setConfig(res.data))
       .catch(() => alert("Failed to load config"));
   }, []);
 
-  /* -----------------------------
-  DERIVED
-  ----------------------------- */
   const boards = config ? Object.keys(config.education || {}) : [];
 
   const subjects =
@@ -80,9 +60,14 @@ function App() {
       ? config.education[board][subject]
       : [];
 
-  /* -----------------------------
-  ASK QUESTION
-  ----------------------------- */
+  // ---------------- HUMAN THINKING EFFECT ----------------
+  const simulateTyping = (text) => {
+    return new Promise(resolve => {
+      setTimeout(() => resolve(text), 500 + Math.random() * 800);
+    });
+  };
+
+  // ---------------- ASK QUESTION ----------------
   const askQuestion = useCallback(async () => {
 
     if (!question.trim()) return;
@@ -110,27 +95,37 @@ function App() {
 
       const result = res.data;
 
+      // ---------------- ESCALATION ----------------
       if (result.type === "escalation") {
+
+        const msg = await simulateTyping(result.message);
 
         setMessages(prev => [
           ...prev,
-          { role: "ai", text: result.message }
+          { role: "ai", text: msg }
         ]);
 
-        setShowEscalation(true);
+        // delay CTA (feels human)
+        setTimeout(() => {
+          setShowEscalation(true);
+        }, 800);
+
         return;
       }
 
+      // ---------------- NORMAL RESPONSE ----------------
+      const msg = await simulateTyping(result.message);
+
       setMessages(prev => [
         ...prev,
-        { role: "ai", text: result.message }
+        { role: "ai", text: msg }
       ]);
 
     } catch {
 
       setMessages(prev => [
         ...prev,
-        { role: "ai", text: "System temporarily unavailable." }
+        { role: "ai", text: "Hmm… something went wrong. Try again." }
       ]);
 
     } finally {
@@ -139,9 +134,7 @@ function App() {
 
   }, [question, board, subject, chapter]);
 
-  /* -----------------------------
-  ENTER TO SEND
-  ----------------------------- */
+  // ---------------- ENTER SEND ----------------
   const handleKeyDown = (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -149,15 +142,14 @@ function App() {
     }
   };
 
-  /* -----------------------------
-  LEAD VALIDATION
-  ----------------------------- */
+  // ---------------- VALIDATION ----------------
   const isValidEmail = (email) =>
     /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 
   const isValidPhone = (phone) =>
     /^[6-9]\d{9}$/.test(phone);
 
+  // ---------------- SUBMIT LEAD ----------------
   const submitLead = async () => {
 
     if (!name || !isValidEmail(email) || !isValidPhone(phone)) {
@@ -180,12 +172,7 @@ function App() {
     } catch {
       alert("Failed to submit");
     }
-
   };
-
-  /* =============================
-  UI
-  ============================= */
 
   return (
     <div style={{ padding: 30, maxWidth: 800, margin: "auto" }}>
@@ -227,17 +214,12 @@ function App() {
           }}>
             <div style={{
               display: "inline-block",
-              padding: 10,
-              background: m.role === "user" ? "#DCF8C6" : "#eee",
-              borderRadius: 10,
+              padding: 12,
+              background: m.role === "user" ? "#DCF8C6" : "#f1f1f1",
+              borderRadius: 12,
               maxWidth: "75%"
             }}>
-              <ReactMarkdown
-                remarkPlugins={[remarkMath]}
-                rehypePlugins={[rehypeKatex]}
-              >
-                {m.text}
-              </ReactMarkdown>
+              <ReactMarkdown>{m.text}</ReactMarkdown>
             </div>
           </div>
         ))}
@@ -245,13 +227,12 @@ function App() {
         <div ref={chatEndRef} />
       </div>
 
-      {loading && <p>Thinking...</p>}
+      {loading && <p>Thinking…</p>}
 
       {/* INPUT */}
 
       <textarea
-        ref={inputRef}
-        placeholder="Ask your question clearly... (Press Enter to send)"
+        placeholder="Ask your question clearly... (Enter to send)"
         value={question}
         onChange={(e) => setQuestion(e.target.value)}
         onKeyDown={handleKeyDown}
@@ -264,8 +245,14 @@ function App() {
       {/* ESCALATION */}
 
       {showEscalation && !showLeadForm && (
-        <div style={{ marginTop: 20, padding: 20, border: "2px solid orange" }}>
-          <h3>Need help from a teacher?</h3>
+        <div style={{
+          marginTop: 20,
+          padding: 20,
+          border: "2px solid #ffa500",
+          borderRadius: 10
+        }}>
+          <h3>Want help from a real teacher?</h3>
+          <p>This topic can be easier with personal guidance.</p>
           <button onClick={() => setShowLeadForm(true)}>
             Talk to a Teacher
           </button>
@@ -287,8 +274,8 @@ function App() {
 
       {leadSubmitted && (
         <div style={{ marginTop: 20 }}>
-          <h3>✅ A teacher will contact you within 24 hours</h3>
-          <p>You can continue chatting while waiting.</p>
+          <h3>✅ A teacher will contact you soon</h3>
+          <p>You can continue learning meanwhile.</p>
         </div>
       )}
 

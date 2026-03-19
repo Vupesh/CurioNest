@@ -9,10 +9,6 @@ from engine.lead_persistence import LeadPersistenceService
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 
-# =============================
-# CLEAN OUTPUT (NO LATEX ISSUES)
-# =============================
-
 def normalize_latex(text):
     if not text:
         return text
@@ -24,10 +20,6 @@ def normalize_latex(text):
 
     return text.strip()
 
-
-# =============================
-# AGENT
-# =============================
 
 class StudentSupportAgentV5:
 
@@ -42,13 +34,12 @@ class StudentSupportAgentV5:
 
         self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-        # session behavior tracking
         self.session_confusion = {}
         self.session_escalated = {}
 
-    # =============================
-    # ENTRY POINT
-    # =============================
+    # ============================================
+    # MAIN ENTRY
+    # ============================================
 
     def receive_question(self, question, context, session_id):
 
@@ -57,152 +48,158 @@ class StudentSupportAgentV5:
             subject = context.get("subject")
             chapter = context.get("chapter")
 
-            # -------------------------
-            # CACHE (FAST PATH)
-            # -------------------------
+            # ---------------- CACHE ----------------
             cached = self.cache.lookup(question, subject, chapter)
             if cached:
                 return {"type": "answer", "message": cached}
 
-            # -------------------------
-            # SESSION MEMORY
-            # -------------------------
             if self.session_engine:
                 self.session_engine.store_message(session_id, "user", question)
 
-            # -------------------------
-            # AI INTENT DETECTION (FIXED)
-            # -------------------------
+            # ---------------- INTENT ----------------
             intent = self._intent(question)
 
-            # detect numerical
+            # soft signal boost (NOT hard rules)
+            if self._soft_confusion_signal(question):
+                intent = "CONFUSION"
+
             is_numerical = bool(re.search(r"\d", question))
 
-            # -------------------------
-            # RAG
-            # -------------------------
-            try:
-                chunks = self.rag_store.search(question, subject, chapter)
-            except:
-                chunks = []
+            count = self.session_confusion.get(session_id, 0)
 
-            # -------------------------
-            # ESCALATION LOGIC
-            # -------------------------
+            # ---------------- CONFUSION TRACK ----------------
+            if intent == "CONFUSION":
+                count += 1
+            elif intent == "NORMAL":
+                count = max(0, count - 1)  # gradual decay (human-like)
+            
+            self.session_confusion[session_id] = count
+
+            # ---------------- ESCALATION ----------------
             if not self.session_escalated.get(session_id):
 
-                count = self.session_confusion.get(session_id, 0)
-
-                if intent in ["CONFUSION", "HELP"]:
-                    count += 1
-                    self.session_confusion[session_id] = count
-
-                # avoid numerical escalation
                 if not is_numerical:
-
-                    if count >= 3:
-                        self.session_escalated[session_id] = True
-                        return self._escalate(question, subject, chapter, session_id)
 
                     if intent == "HELP":
                         self.session_escalated[session_id] = True
                         return self._escalate(question, subject, chapter, session_id)
 
-            # -------------------------
-            # ANSWER GENERATION
-            # -------------------------
-            if chunks:
-                answer = self._answer_rag(question, chunks)
+                    if count >= 3:
+                        self.session_escalated[session_id] = True
+                        return self._escalate(question, subject, chapter, session_id)
+
+            # ---------------- ANSWER ----------------
+            if intent == "CONFUSION" and count >= 1:
+                answer = self._answer_with_recovery(question, subject, chapter)
             else:
-                answer = self._answer_general(question)
+                answer = self._answer(question, subject, chapter)
 
             answer = normalize_latex(answer)
 
-            # -------------------------
-            # CACHE STORE
-            # -------------------------
             self.cache.store(question, subject, chapter, answer)
 
-            # -------------------------
-            # SESSION MEMORY STORE
-            # -------------------------
             if self.session_engine:
                 self.session_engine.store_message(session_id, "assistant", answer)
 
             return {"type": "answer", "message": answer}
 
         except Exception as e:
-
             self.logger.log("AGENT_ERROR", str(e))
-
             return {
                 "type": "error",
                 "message": "System temporarily unavailable."
             }
 
-    # =============================
-    # AI INTENT (FINAL FIX)
-    # =============================
+    # ============================================
+    # INTENT (AI FIRST)
+    # ============================================
 
     def _intent(self, question):
 
         prompt = f"""
-Classify the student's intent.
+You are detecting student learning state.
 
-Return ONLY one word:
+Classify into ONE:
 
-NORMAL
-CONFUSION
-HELP
+NORMAL → student asking or learning
+CONFUSION → student struggling or not understanding
+HELP → student wants teacher/tutor
 
-Examples:
-"I don't understand this" → CONFUSION
-"Explain again please" → CONFUSION
-"Can a teacher help me?" → HELP
-"What is force?" → NORMAL
+IMPORTANT:
+- Short phrases like "confused", "not sure", "didn't get it" = CONFUSION
+- Even broken English should be understood
 
 Question:
 {question}
+
+Return ONLY one word.
 """
 
         try:
-
             res = self.client.chat.completions.create(
                 model=OPENAI_MODEL,
                 temperature=0,
                 max_tokens=5,
                 messages=[
-                    {"role": "system", "content": "Return only one word."},
+                    {"role": "system", "content": "Strict classifier."},
                     {"role": "user", "content": prompt}
                 ]
             )
 
             intent = res.choices[0].message.content.strip().upper()
 
-            if intent not in ["NORMAL", "CONFUSION", "HELP"]:
-                return "NORMAL"
-
-            return intent
+            if intent in ["NORMAL", "CONFUSION", "HELP"]:
+                return intent
 
         except:
-            return "NORMAL"
+            pass
 
-    # =============================
-    # RAG ANSWER
-    # =============================
+        return "NORMAL"
 
-    def _answer_rag(self, question, chunks):
+    # ============================================
+    # SOFT SIGNAL (NOT HARD CODING)
+    # ============================================
+
+    def _soft_confusion_signal(self, q):
+        q = q.lower()
+
+        # pattern-based (not strict keywords)
+        return (
+            len(q) < 25 and (
+                "confus" in q or
+                "not" in q and "understand" in q or
+                "clear" in q or
+                "again" in q
+            )
+        )
+
+    # ============================================
+    # ANSWER (RAG + GENERAL)
+    # ============================================
+
+    def _answer(self, question, subject, chapter):
+
+        try:
+            chunks = self.rag_store.search(question, subject, chapter)
+        except:
+            chunks = []
+
+        if chunks:
+            context = "".join(chunks)
+        else:
+            context = ""
 
         prompt = f"""
-Explain clearly like a teacher.
+You are a friendly teacher.
 
 Rules:
-- Use simple equations (F = m × a)
-- DO NOT use LaTeX syntax
-- Keep answer structured and simple
+- Be clear and simple
+- Do NOT change topic
+- Use relatable explanation
+- Avoid robotic tone
 
 Context:
-{''.join(chunks)}
+{context}
 
 Question:
 {question}
@@ -210,27 +207,26 @@ Question:
 
         res = self.client.chat.completions.create(
             model=OPENAI_MODEL,
-            temperature=0.3,
-            messages=[
-                {"role": "user", "content": prompt}
-            ]
+            temperature=0.4,
+            messages=[{"role": "user", "content": prompt}]
         )
 
         return res.choices[0].message.content
 
-    # =============================
-    # GENERAL ANSWER
-    # =============================
+    # ============================================
+    # RECOVERY ANSWER (HUMAN-LIKE)
+    # ============================================
 
-    def _answer_general(self, question):
+    def _answer_with_recovery(self, question, subject, chapter):
 
         prompt = f"""
-Explain clearly like a teacher.
+Student is confused.
 
-Rules:
-- Use simple equations (KE = 1/2 mv^2)
-- DO NOT use LaTeX syntax
-- Keep it clean and beginner-friendly
+Re-explain more simply:
+- Use analogy
+- Break into steps
+- Be very clear
+- Sound human and supportive
 
 Question:
 {question}
@@ -238,17 +234,15 @@ Question:
 
         res = self.client.chat.completions.create(
             model=OPENAI_MODEL,
-            temperature=0.3,
-            messages=[
-                {"role": "user", "content": prompt}
-            ]
+            temperature=0.5,
+            messages=[{"role": "user", "content": prompt}]
         )
 
         return res.choices[0].message.content
 
-    # =============================
+    # ============================================
     # ESCALATION
-    # =============================
+    # ============================================
 
     def _escalate(self, question, subject, chapter, session_id):
 
@@ -270,5 +264,5 @@ Question:
 
         return {
             "type": "escalation",
-            "message": "A teacher will contact you shortly."
+            "message": "It seems this topic needs personal guidance. A teacher can help you better."
         }
