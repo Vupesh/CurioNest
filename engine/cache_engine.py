@@ -5,7 +5,11 @@ import json
 from langchain_openai import OpenAIEmbeddings
 
 
-SIMILARITY_THRESHOLD = float(os.getenv("CACHE_SIMILARITY_THRESHOLD", "0.92"))
+# 🔥 FIXED THRESHOLD (was too strict earlier)
+SIMILARITY_THRESHOLD = float(os.getenv("CACHE_SIMILARITY_THRESHOLD", "0.85"))
+
+# limit rows for performance
+CACHE_SCAN_LIMIT = int(os.getenv("CACHE_SCAN_LIMIT", "200"))
 
 
 class CacheEngine:
@@ -26,7 +30,6 @@ class CacheEngine:
     # ------------------------------
 
     def _connect(self):
-
         return psycopg2.connect(self.database_url)
 
     # ------------------------------
@@ -38,7 +41,12 @@ class CacheEngine:
         a = np.array(a)
         b = np.array(b)
 
-        return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
+        denom = (np.linalg.norm(a) * np.linalg.norm(b))
+
+        if denom == 0:
+            return 0.0
+
+        return float(np.dot(a, b) / denom)
 
     # ------------------------------
     # CACHE LOOKUP
@@ -53,13 +61,16 @@ class CacheEngine:
             conn = self._connect()
             cur = conn.cursor()
 
+            # 🔥 optimized query (LIMIT added)
             cur.execute(
                 """
                 SELECT embedding, answer
                 FROM qa_cache
                 WHERE subject = %s
+                ORDER BY created_at DESC
+                LIMIT %s
                 """,
-                (subject,)
+                (subject, CACHE_SCAN_LIMIT)
             )
 
             rows = cur.fetchall()
@@ -67,8 +78,8 @@ class CacheEngine:
             cur.close()
             conn.close()
 
-        except Exception:
-
+        except Exception as e:
+            print("CACHE_LOOKUP_ERROR:", e)
             return None
 
         best_score = 0
@@ -78,6 +89,7 @@ class CacheEngine:
 
             try:
 
+                # 🔥 FIX: ensure proper parsing
                 if isinstance(embedding, str):
                     embedding = json.loads(embedding)
 
@@ -86,14 +98,21 @@ class CacheEngine:
                     embedding
                 )
 
+                # 🔥 DEBUG (remove later if needed)
+                print("CACHE SCORE:", round(score, 3))
+
                 if score > SIMILARITY_THRESHOLD and score > best_score:
 
                     best_score = score
                     best_answer = answer
 
             except Exception:
-
                 continue
+
+        if best_answer:
+            print("✅ CACHE HIT")
+        else:
+            print("❌ CACHE MISS")
 
         return best_answer
 
@@ -118,7 +137,7 @@ class CacheEngine:
                 """,
                 (
                     question,
-                    json.dumps(embedding),
+                    json.dumps(embedding),  # 🔥 IMPORTANT FIX
                     answer,
                     subject,
                     chapter
@@ -130,6 +149,8 @@ class CacheEngine:
             cur.close()
             conn.close()
 
-        except Exception:
+            print("💾 CACHE STORED")
 
-            pass
+        except Exception as e:
+
+            print("CACHE_STORE_ERROR:", e)
