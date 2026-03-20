@@ -9,7 +9,6 @@ from engine.lead_persistence import LeadPersistenceService
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 
-# ================= CLEAN (NO LATEX EVER) =================
 def clean(text):
     if not text:
         return text
@@ -17,9 +16,6 @@ def clean(text):
     text = re.sub(r"\\\[(.*?)\\\]", r"\1", text)
     text = re.sub(r"\\\((.*?)\\\)", r"\1", text)
     text = re.sub(r"\\frac\{(.*?)\}\{(.*?)\}", r"\1/\2", text)
-    text = re.sub(r"\\sqrt\{(.*?)\}", r"sqrt(\1)", text)
-    text = re.sub(r"\\times", "×", text)
-    text = re.sub(r"\\cdot", "·", text)
     text = re.sub(r"\\[a-zA-Z]+", "", text)
     text = re.sub(r"\s+", " ", text)
 
@@ -41,6 +37,7 @@ class StudentSupportAgentV5:
 
         self.session_confusion = {}
         self.session_escalated = {}
+        self.session_rejected = {}
 
     # ================= MAIN =================
     def receive_question(self, question, context, session_id):
@@ -62,6 +59,14 @@ class StudentSupportAgentV5:
             if cached:
                 return {"type": "answer", "message": cached}
 
+            # ---------- USER REJECTION ----------
+            if "dont need teacher" in question.lower():
+                self.session_rejected[session_id] = True
+                return {
+                    "type": "answer",
+                    "message": "No problem 👍 Let’s continue. Ask your doubt."
+                }
+
             # ---------- INTENT ----------
             intent = self._intent(question)
 
@@ -73,7 +78,14 @@ class StudentSupportAgentV5:
             if intent == "EMOTIONAL":
                 return {
                     "type": "answer",
-                    "message": "You’ll do fine 👍 Focus on concepts step by step. I’m here to help."
+                    "message": "You’ll do fine 👍 Focus on concepts step by step."
+                }
+
+            # ---------- SUBJECT FILTER ----------
+            if self._is_wrong_subject(question, subject):
+                return {
+                    "type": "answer",
+                    "message": "Please ask from this subject."
                 }
 
             # ---------- CONFUSION TRACK ----------
@@ -81,25 +93,21 @@ class StudentSupportAgentV5:
 
             if intent == "CONFUSION":
                 count += 1
-            elif intent == "NORMAL":
-                count = max(0, count - 1)
 
             self.session_confusion[session_id] = count
 
             # ---------- ESCALATION ----------
             if not self.session_escalated.get(session_id):
-                if count >= 3:
+                if count >= 3 and not self.session_rejected.get(session_id):
                     return self._escalate(question, subject, chapter, session_id)
 
-            # ---------- ANSWER STRATEGY ----------
+            # ---------- ANSWER ----------
             if count == 0:
                 answer = self._answer(question, subject, chapter)
-
             elif count == 1:
-                answer = self._simplify(question, subject, chapter)
-
+                answer = self._simplify(question)
             else:
-                answer = self._example(question, subject, chapter)
+                answer = self._example(question)
 
             answer = clean(answer)
 
@@ -115,23 +123,20 @@ class StudentSupportAgentV5:
     def _intent(self, question):
 
         prompt = f"""
-Classify intent:
+Classify:
 
-NORMAL → valid academic question
-CONFUSION → student not understanding
-HELP → wants teacher
-EMOTIONAL → fear, pass/fail, reassurance
+NORMAL
+CONFUSION
+HELP
+EMOTIONAL
 
-IMPORTANT:
-- "Explain more" = NORMAL
-- "Explain with example" = NORMAL
+Rules:
 - "I don't understand" = CONFUSION
-- "talk to teacher" = HELP
+- "explain again" = CONFUSION
+- "teacher" = HELP
+- "pass/fail" = EMOTIONAL
 
-Question:
-{question}
-
-Return one word.
+Question: {question}
 """
 
         try:
@@ -142,59 +147,54 @@ Return one word.
                 messages=[{"role": "user", "content": prompt}]
             )
 
-            out = res.choices[0].message.content.strip().upper()
-
-            if out in ["NORMAL", "CONFUSION", "HELP", "EMOTIONAL"]:
-                return out
+            return res.choices[0].message.content.strip().upper()
 
         except:
-            pass
+            return "NORMAL"
 
-        return "NORMAL"
+    # ================= SUBJECT CHECK =================
+    def _is_wrong_subject(self, q, subject):
 
-    # ================= ANSWER =================
+        q = q.lower()
+
+        if subject == "physics":
+            if any(x in q for x in ["cell", "mitochondria", "photosynthesis"]):
+                return True
+
+        if subject == "chemistry":
+            if any(x in q for x in ["force", "velocity", "current"]):
+                return True
+
+        return False
+
+    # ================= ANSWERS =================
     def _answer(self, q, subject, chapter):
 
         context = self._context(q, subject, chapter)
 
-        prompt = f"""
-You are a teacher for {subject}.
+        return self._llm(f"""
+Explain clearly:
+- Definition
+- Key idea
+- Simple explanation
 
-RULES:
-- Answer ANY question related to {subject}
-- Do NOT reject valid subject questions
-- Use context if available, else use knowledge
-- Reject ONLY if clearly from a different subject
-- NO LATEX
-
-Explain:
-1. Definition
-2. Key idea
-3. Simple explanation
+NO LATEX.
 
 Question: {q}
 Context: {context}
-"""
+""")
 
-        return self._llm(prompt)
-
-    def _simplify(self, q, subject, chapter):
+    def _simplify(self, q):
 
         return self._llm(f"""
-Explain simply in 2–3 lines.
-Stay on same topic.
-NO LATEX.
-
+Explain simply in 2 lines.
 Question: {q}
 """)
 
-    def _example(self, q, subject, chapter):
+    def _example(self, q):
 
         return self._llm(f"""
-Explain with a simple example or diagram description.
-Stay on same topic.
-NO LATEX.
-
+Explain with simple example.
 Question: {q}
 """)
 
