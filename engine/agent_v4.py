@@ -18,6 +18,8 @@ def clean(text):
     text = re.sub(r"\\\((.*?)\\\)", r"\1", text)
     text = re.sub(r"\\frac\{(.*?)\}\{(.*?)\}", r"\1/\2", text)
     text = re.sub(r"\\sqrt\{(.*?)\}", r"sqrt(\1)", text)
+    text = re.sub(r"\\times", "×", text)
+    text = re.sub(r"\\cdot", "·", text)
     text = re.sub(r"\\[a-zA-Z]+", "", text)
     text = re.sub(r"\s+", " ", text)
 
@@ -39,7 +41,6 @@ class StudentSupportAgentV5:
 
         self.session_confusion = {}
         self.session_escalated = {}
-        self.session_rejected = {}
 
     # ================= MAIN =================
     def receive_question(self, question, context, session_id):
@@ -114,17 +115,17 @@ class StudentSupportAgentV5:
     def _intent(self, question):
 
         prompt = f"""
-Classify:
+Classify intent:
 
 NORMAL → valid academic question
 CONFUSION → student not understanding
 HELP → wants teacher
-EMOTIONAL → pass/fail, fear, feelings
+EMOTIONAL → fear, pass/fail, reassurance
 
 IMPORTANT:
 - "Explain more" = NORMAL
 - "Explain with example" = NORMAL
-- "I don’t understand" = CONFUSION
+- "I don't understand" = CONFUSION
 - "talk to teacher" = HELP
 
 Question:
@@ -157,11 +158,13 @@ Return one word.
         context = self._context(q, subject, chapter)
 
         prompt = f"""
-You are teaching {subject}.
+You are a teacher for {subject}.
 
-STRICT RULES:
-- Answer ONLY related to {subject}
-- If unrelated → say "Please ask from this chapter"
+RULES:
+- Answer ANY question related to {subject}
+- Do NOT reject valid subject questions
+- Use context if available, else use knowledge
+- Reject ONLY if clearly from a different subject
 - NO LATEX
 
 Explain:
@@ -178,7 +181,8 @@ Context: {context}
     def _simplify(self, q, subject, chapter):
 
         return self._llm(f"""
-Explain in very simple words (2 lines).
+Explain simply in 2–3 lines.
+Stay on same topic.
 NO LATEX.
 
 Question: {q}
@@ -187,7 +191,8 @@ Question: {q}
     def _example(self, q, subject, chapter):
 
         return self._llm(f"""
-Explain with a simple example or numerical.
+Explain with a simple example or diagram description.
+Stay on same topic.
 NO LATEX.
 
 Question: {q}
