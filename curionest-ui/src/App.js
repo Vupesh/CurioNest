@@ -4,6 +4,7 @@ import ReactMarkdown from "react-markdown";
 
 const API_BASE = "http://127.0.0.1:5000";
 
+/* SESSION */
 const getSessionId = () => {
   let id = localStorage.getItem("curionest_session");
   if (!id) {
@@ -14,6 +15,8 @@ const getSessionId = () => {
 };
 
 function App() {
+
+  const [config, setConfig] = useState(null);
 
   const [board, setBoard] = useState("");
   const [subject, setSubject] = useState("");
@@ -33,9 +36,30 @@ function App() {
 
   const chatEndRef = useRef(null);
 
+  /* SCROLL */
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  /* LOAD DOMAIN CONFIG */
+  useEffect(() => {
+    axios.get(`${API_BASE}/domain-config`)
+      .then(res => setConfig(res.data))
+      .catch(() => alert("Failed to load config"));
+  }, []);
+
+  /* DERIVED */
+  const boards = config ? Object.keys(config.education || {}) : [];
+
+  const subjects =
+    board && config?.education?.[board]
+      ? Object.keys(config.education[board])
+      : [];
+
+  const chapters =
+    board && subject && config?.education?.[board]?.[subject]
+      ? config.education[board][subject]
+      : [];
 
   // ================= ASK =================
   const askQuestion = useCallback(async () => {
@@ -53,7 +77,7 @@ function App() {
     setQuestion("");
     setLoading(true);
 
-    // ✅ RESET ESCALATION UI ON NEW MESSAGE
+    // ✅ RESET escalation UI
     setShowEscalation(false);
     setShowLeadForm(false);
 
@@ -69,30 +93,29 @@ function App() {
 
       const result = res.data;
 
-      // ================= SMALLTALK =================
+      // SMALLTALK
       if (result.type === "smalltalk") {
         setMessages(prev => [...prev, { role: "ai", text: result.message }]);
         return;
       }
 
-      // ================= ESCALATION =================
+      // ESCALATION
       if (result.type === "escalation") {
         setMessages(prev => [...prev, { role: "ai", text: result.message }]);
-
-        // 🔥 ALWAYS SHOW ESCALATION UI
         setShowEscalation(true);
-
         return;
       }
 
-      // ================= NORMAL =================
+      // NORMAL
       setMessages(prev => [...prev, { role: "ai", text: result.message }]);
 
     } catch {
+
       setMessages(prev => [
         ...prev,
         { role: "ai", text: "System temporarily unavailable." }
       ]);
+
     } finally {
       setLoading(false);
     }
@@ -106,7 +129,7 @@ function App() {
     }
   };
 
-  // ================= LEAD SUBMIT =================
+  // ================= LEAD =================
   const submitLead = async () => {
 
     if (!name || !email || !phone) {
@@ -134,9 +157,7 @@ function App() {
     }
   };
 
-  // ================= REJECT =================
   const rejectTeacher = () => {
-
     setShowEscalation(false);
     setShowLeadForm(false);
 
@@ -154,10 +175,28 @@ function App() {
 
       <h2>CurioNest</h2>
 
-      {/* SELECTORS */}
-      <input placeholder="Board" value={board} onChange={e => setBoard(e.target.value)} />
-      <input placeholder="Subject" value={subject} onChange={e => setSubject(e.target.value)} />
-      <input placeholder="Chapter" value={chapter} onChange={e => setChapter(e.target.value)} />
+      {/* DROPDOWNS */}
+      <select value={board} onChange={(e) => {
+        setBoard(e.target.value);
+        setSubject("");
+        setChapter("");
+      }}>
+        <option value="">Select Board</option>
+        {boards.map(b => <option key={b}>{b}</option>)}
+      </select>
+
+      <select value={subject} onChange={(e) => {
+        setSubject(e.target.value);
+        setChapter("");
+      }}>
+        <option value="">Select Subject</option>
+        {subjects.map(s => <option key={s}>{s}</option>)}
+      </select>
+
+      <select value={chapter} onChange={(e) => setChapter(e.target.value)}>
+        <option value="">Select Chapter</option>
+        {chapters.map(c => <option key={c}>{c}</option>)}
+      </select>
 
       {/* CHAT */}
       <div style={{ marginTop: 20 }}>
@@ -188,32 +227,27 @@ function App() {
         onChange={(e) => setQuestion(e.target.value)}
         onKeyDown={handleKeyDown}
         rows={3}
-        style={{ width: "100%" }}
+        style={{ width: "100%", marginTop: 20 }}
       />
 
       <button onClick={askQuestion}>Ask</button>
 
-      {/* ESCALATION UI */}
+      {/* ESCALATION */}
       {showEscalation && (
         <div style={{ border: "2px solid orange", padding: 15, marginTop: 20 }}>
           <h3>Talk to a Teacher</h3>
 
-          <button onClick={() => setShowLeadForm(true)}>
-            Yes
-          </button>
-
-          <button onClick={rejectTeacher} style={{ marginLeft: 10 }}>
-            No
-          </button>
+          <button onClick={() => setShowLeadForm(true)}>Yes</button>
+          <button onClick={rejectTeacher} style={{ marginLeft: 10 }}>No</button>
         </div>
       )}
 
       {/* LEAD FORM */}
       {showLeadForm && (
         <div style={{ marginTop: 20 }}>
-          <input placeholder="Name" value={name} onChange={e => setName(e.target.value)} />
-          <input placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} />
-          <input placeholder="Phone" value={phone} onChange={e => setPhone(e.target.value)} />
+          <input placeholder="Name" value={name} onChange={(e) => setName(e.target.value)} />
+          <input placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} />
+          <input placeholder="Phone" value={phone} onChange={(e) => setPhone(e.target.value)} />
           <button onClick={submitLead}>Submit</button>
         </div>
       )}
