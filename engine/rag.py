@@ -10,10 +10,10 @@ CHROMA_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "chroma_db"))
 
 COLLECTION_NAME = "curionest"
 
-# distance threshold for valid semantic matches
-DISTANCE_THRESHOLD = float(os.getenv("RAG_DISTANCE_THRESHOLD", "0.35"))
+# distance threshold for semantic filtering
+DISTANCE_THRESHOLD = float(os.getenv("RAG_DISTANCE_THRESHOLD", "0.5"))
 
-# max chunks returned to agent
+# max chunks returned
 MAX_CHUNKS = int(os.getenv("RAG_MAX_CHUNKS", "5"))
 
 
@@ -25,14 +25,14 @@ class ChromaRAGStore:
 
         self.logger = LoggingService()
 
-        # -------- Chroma Client --------
+        # ---------- Chroma Client ----------
 
         self.client = chromadb.PersistentClient(
             path=CHROMA_DIR,
             settings=Settings(anonymized_telemetry=False)
         )
 
-        # -------- Embedding Model --------
+        # ---------- Embedding Model ----------
 
         try:
             self.embedder = OpenAIEmbeddings(
@@ -42,7 +42,7 @@ class ChromaRAGStore:
             self.logger.log("EMBEDDING_INIT_ERROR", str(e))
             raise e
 
-        # -------- Collection --------
+        # ---------- Collection ----------
 
         try:
             self.collection = self.client.get_or_create_collection(
@@ -53,7 +53,6 @@ class ChromaRAGStore:
             self.logger.log("CHROMA_COLLECTION_ERROR", str(e))
             raise e
 
-
     # =====================================================
     # SEARCH
     # =====================================================
@@ -63,17 +62,17 @@ class ChromaRAGStore:
         if not query or not subject:
             return []
 
-        if not k:
-            k = MAX_CHUNKS
+        k = k or MAX_CHUNKS
+
+        # ---------- EMBEDDING ----------
 
         try:
-
             query_embedding = self.embedder.embed_query(query)
-
         except Exception as e:
-
             self.logger.log("EMBEDDING_FAILURE", str(e))
             return []
+
+        # ---------- QUERY ----------
 
         try:
 
@@ -90,12 +89,13 @@ class ChromaRAGStore:
             )
 
         except Exception as e:
-
             self.logger.log("RAG_QUERY_FAILURE", str(e))
             return []
 
         documents = res.get("documents")
         distances = res.get("distances")
+
+        # ---------- NO RESULT ----------
 
         if not documents or not documents[0]:
 
@@ -108,26 +108,49 @@ class ChromaRAGStore:
             return []
 
         docs = documents[0]
-        dists = distances[0] if distances else []
+
+        # Ensure distances always match docs length
+        if distances and distances[0]:
+            dists = distances[0]
+        else:
+            dists = [None] * len(docs)
+
+        # ---------- FILTER ----------
 
         filtered_docs = []
 
         for doc, dist in zip(docs, dists):
 
-            # semantic filtering
-            if dist is not None and dist <= DISTANCE_THRESHOLD:
-
+            # Keep if:
+            # - distance missing (fail-safe)
+            # - OR within threshold
+            if dist is None or dist <= DISTANCE_THRESHOLD:
                 filtered_docs.append(doc)
 
-        # enforce max chunk limit
+        # ---------- FALLBACK (CRITICAL) ----------
+
+        if not filtered_docs:
+
+            self.logger.log("RAG_FALLBACK_USED", {
+                "query": query[:80],
+                "reason": "all results filtered out"
+            })
+
+            filtered_docs = docs[:MAX_CHUNKS]
+
+        # enforce max limit
         filtered_docs = filtered_docs[:MAX_CHUNKS]
+
+        # ---------- LOG ----------
 
         self.logger.log("RAG_SUCCESS", {
             "query": query[:80],
             "subject": subject,
             "chapter": chapter,
-            "chunks": len(filtered_docs),
-            "distance_threshold": DISTANCE_THRESHOLD
+            "returned_chunks": len(filtered_docs),
+            "raw_chunks": len(docs),
+            "sample_distances": dists[:3],
+            "threshold": DISTANCE_THRESHOLD
         })
 
         return filtered_docs
