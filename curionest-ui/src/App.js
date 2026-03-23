@@ -77,7 +77,7 @@ function App() {
     setQuestion("");
     setLoading(true);
 
-    // RESET escalation UI
+    // ✅ RESET escalation UI
     setShowEscalation(false);
     setShowLeadForm(false);
 
@@ -92,34 +92,22 @@ function App() {
       });
 
       const result = res.data;
-      const msg = result.message || "";
 
-      // ================= SMALLTALK =================
+      // SMALLTALK
       if (result.type === "smalltalk") {
-        setMessages(prev => [...prev, { role: "ai", text: msg }]);
+        setMessages(prev => [...prev, { role: "ai", text: result.message }]);
         return;
       }
 
-      // ================= HARD ESCALATION =================
+      // ESCALATION
       if (result.type === "escalation") {
-        setMessages(prev => [...prev, { role: "ai", text: msg }]);
+        setMessages(prev => [...prev, { role: "ai", text: result.message }]);
         setShowEscalation(true);
         return;
       }
 
-      // ================= NORMAL + SOFT ESCALATION =================
-      setMessages(prev => [...prev, { role: "ai", text: msg }]);
-
-      // 🔥 Detect soft escalation from message
-      const lowerMsg = msg.toLowerCase();
-
-      const isSoftEscalation =
-        lowerMsg.includes("want help from a teacher") ||
-        lowerMsg.includes("teacher can guide you");
-
-      if (isSoftEscalation) {
-        setShowEscalation(true);
-      }
+      // NORMAL
+      setMessages(prev => [...prev, { role: "ai", text: result.message }]);
 
     } catch {
 
@@ -170,7 +158,6 @@ function App() {
   };
 
   const rejectTeacher = () => {
-
     setShowEscalation(false);
     setShowLeadForm(false);
 
