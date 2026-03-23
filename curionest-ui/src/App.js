@@ -1,22 +1,12 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect } from "react";
 import axios from "axios";
-import ReactMarkdown from "react-markdown";
 
-const API_BASE = "http://127.0.0.1:5000";
-
-/* SESSION */
-const getSessionId = () => {
-  let id = localStorage.getItem("curionest_session");
-  if (!id) {
-    id = "sess_" + Math.random().toString(36).substring(2) + Date.now();
-    localStorage.setItem("curionest_session", id);
-  }
-  return id;
-};
+const API = "http://127.0.0.1:5000";
 
 function App() {
 
-  const [config, setConfig] = useState(null);
+  // ================= STATE =================
+  const [config, setConfig] = useState({});
 
   const [board, setBoard] = useState("");
   const [subject, setSubject] = useState("");
@@ -26,242 +16,196 @@ function App() {
   const [question, setQuestion] = useState("");
 
   const [loading, setLoading] = useState(false);
-
   const [showEscalation, setShowEscalation] = useState(false);
-  const [showLeadForm, setShowLeadForm] = useState(false);
 
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
-  const [phone, setPhone] = useState("");
-
-  const chatEndRef = useRef(null);
-
-  /* SCROLL */
+  // ================= LOAD CONFIG =================
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
-
-  /* LOAD DOMAIN CONFIG */
-  useEffect(() => {
-    axios.get(`${API_BASE}/domain-config`)
-      .then(res => setConfig(res.data))
-      .catch(() => alert("Failed to load config"));
+    axios.get(`${API}/domain-config`)
+      .then(res => {
+        setConfig(res.data.education || {});
+      })
+      .catch(() => {
+        alert("Failed to load configuration");
+      });
   }, []);
 
-  /* DERIVED */
-  const boards = config ? Object.keys(config.education || {}) : [];
+  // ================= DERIVED =================
+  const boards = Object.keys(config);
 
-  const subjects =
-    board && config?.education?.[board]
-      ? Object.keys(config.education[board])
-      : [];
+  const subjects = board && config[board]
+    ? Object.keys(config[board])
+    : [];
 
-  const chapters =
-    board && subject && config?.education?.[board]?.[subject]
-      ? config.education[board][subject]
-      : [];
+  const chapters = board && subject && config[board]?.[subject]
+    ? config[board][subject]
+    : [];
 
   // ================= ASK =================
-  const askQuestion = useCallback(async () => {
-
-    if (!question.trim()) return;
+  const askQuestion = async () => {
 
     if (!board || !subject || !chapter) {
-      alert("Select Board, Subject, Chapter");
+      alert("Please select Board, Subject and Chapter");
       return;
     }
 
-    const q = question.trim();
+    if (!question.trim()) return;
 
+    const q = question;
+
+    // Add user message
     setMessages(prev => [...prev, { role: "user", text: q }]);
+
     setQuestion("");
     setLoading(true);
-
-    // RESET escalation UI
     setShowEscalation(false);
-    setShowLeadForm(false);
 
     try {
-
-      const res = await axios.post(`${API_BASE}/ask-question`, {
-        session_id: getSessionId(),
+      const res = await axios.post(`${API}/ask-question`, {
+        session_id: "session_1",
         board,
         subject,
         chapter,
         question: q
       });
 
-      const result = res.data;
-      const msg = result.message || "";
+      const data = res.data;
 
-      // ================= SMALLTALK =================
-      if (result.type === "smalltalk") {
-        setMessages(prev => [...prev, { role: "ai", text: msg }]);
-        return;
-      }
+      // Add AI response
+      setMessages(prev => [
+        ...prev,
+        { role: "ai", text: data.message }
+      ]);
 
-      // ================= HARD ESCALATION =================
-      if (result.type === "escalation") {
-        setMessages(prev => [...prev, { role: "ai", text: msg }]);
-        setShowEscalation(true);
-        return;
-      }
-
-      // ================= NORMAL + SOFT ESCALATION =================
-      setMessages(prev => [...prev, { role: "ai", text: msg }]);
-
-      // 🔥 Detect soft escalation from message
-      const lowerMsg = msg.toLowerCase();
-
-      const isSoftEscalation =
-        lowerMsg.includes("want help from a teacher") ||
-        lowerMsg.includes("teacher can guide you");
-
-      if (isSoftEscalation) {
+      // Escalation UI trigger
+      if (data.type === "escalation") {
         setShowEscalation(true);
       }
 
     } catch {
-
       setMessages(prev => [
         ...prev,
-        { role: "ai", text: "System temporarily unavailable." }
+        { role: "ai", text: "Something went wrong. Try again." }
       ]);
-
-    } finally {
-      setLoading(false);
     }
 
-  }, [question, board, subject, chapter]);
-
-  const handleKeyDown = (e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      askQuestion();
-    }
+    setLoading(false);
   };
 
-  // ================= LEAD =================
-  const submitLead = async () => {
+  // ================= ESCALATION ACTIONS =================
+  const handleEscalation = (choice) => {
 
-    if (!name || !email || !phone) {
-      alert("Fill all fields");
-      return;
-    }
-
-    try {
-      await axios.post(`${API_BASE}/capture-lead`, {
-        session_id: getSessionId(),
-        name,
-        email,
-        phone
-      });
-
-      setShowLeadForm(false);
-
+    if (choice === "yes") {
       setMessages(prev => [
         ...prev,
-        { role: "ai", text: "✅ Teacher will contact you soon." }
+        { role: "ai", text: "Great 👍 A teacher will reach out to you soon." }
       ]);
-
-    } catch {
-      alert("Submission failed");
+    } else {
+      setMessages(prev => [
+        ...prev,
+        { role: "ai", text: "No problem 👍 Let’s continue learning." }
+      ]);
     }
-  };
-
-  const rejectTeacher = () => {
 
     setShowEscalation(false);
-    setShowLeadForm(false);
-
-    setMessages(prev => [
-      ...prev,
-      {
-        role: "ai",
-        text: "No problem 👍 Let’s continue. Ask your doubt."
-      }
-    ]);
   };
 
+  // ================= UI =================
   return (
     <div style={{ padding: 20, maxWidth: 800, margin: "auto" }}>
 
       <h2>CurioNest</h2>
 
       {/* DROPDOWNS */}
-      <select value={board} onChange={(e) => {
-        setBoard(e.target.value);
-        setSubject("");
-        setChapter("");
-      }}>
-        <option value="">Select Board</option>
-        {boards.map(b => <option key={b}>{b}</option>)}
-      </select>
+      <div style={{ marginBottom: 10 }}>
+        <select
+          value={board}
+          onChange={(e) => {
+            setBoard(e.target.value);
+            setSubject("");
+            setChapter("");
+          }}
+        >
+          <option value="">Select Board</option>
+          {boards.map(b => (
+            <option key={b} value={b}>{b}</option>
+          ))}
+        </select>
 
-      <select value={subject} onChange={(e) => {
-        setSubject(e.target.value);
-        setChapter("");
-      }}>
-        <option value="">Select Subject</option>
-        {subjects.map(s => <option key={s}>{s}</option>)}
-      </select>
+        <select
+          value={subject}
+          onChange={(e) => {
+            setSubject(e.target.value);
+            setChapter("");
+          }}
+          style={{ marginLeft: 10 }}
+        >
+          <option value="">Select Subject</option>
+          {subjects.map(s => (
+            <option key={s} value={s}>{s}</option>
+          ))}
+        </select>
 
-      <select value={chapter} onChange={(e) => setChapter(e.target.value)}>
-        <option value="">Select Chapter</option>
-        {chapters.map(c => <option key={c}>{c}</option>)}
-      </select>
-
-      {/* CHAT */}
-      <div style={{ marginTop: 20 }}>
-        {messages.map((m, i) => (
-          <div key={i} style={{
-            textAlign: m.role === "user" ? "right" : "left",
-            marginBottom: 10
-          }}>
-            <div style={{
-              display: "inline-block",
-              padding: 10,
-              background: m.role === "user" ? "#DCF8C6" : "#eee",
-              borderRadius: 10,
-              maxWidth: "75%"
-            }}>
-              <ReactMarkdown>{m.text}</ReactMarkdown>
-            </div>
-          </div>
-        ))}
-        <div ref={chatEndRef} />
+        <select
+          value={chapter}
+          onChange={(e) => setChapter(e.target.value)}
+          style={{ marginLeft: 10 }}
+        >
+          <option value="">Select Chapter</option>
+          {chapters.map(c => (
+            <option key={c} value={c}>{c}</option>
+          ))}
+        </select>
       </div>
 
-      {loading && <p>Thinking...</p>}
+      {/* CHAT WINDOW */}
+      <div style={{
+        border: "1px solid #ccc",
+        padding: 10,
+        minHeight: 300,
+        marginBottom: 10
+      }}>
+        {messages.map((m, i) => (
+          <p key={i}>
+            <b>{m.role === "user" ? "You" : "CurioNest"}:</b> {m.text}
+          </p>
+        ))}
+
+        {loading && <p><i>Thinking...</i></p>}
+      </div>
 
       {/* INPUT */}
       <textarea
+        rows="3"
+        style={{ width: "100%" }}
         value={question}
         onChange={(e) => setQuestion(e.target.value)}
-        onKeyDown={handleKeyDown}
-        rows={3}
-        style={{ width: "100%", marginTop: 20 }}
+        placeholder="Ask your doubt..."
       />
 
-      <button onClick={askQuestion}>Ask</button>
+      <button onClick={askQuestion} style={{ marginTop: 10 }}>
+        Ask
+      </button>
 
-      {/* ESCALATION */}
+      {/* ESCALATION UI */}
       {showEscalation && (
-        <div style={{ border: "2px solid orange", padding: 15, marginTop: 20 }}>
-          <h3>Talk to a Teacher</h3>
+        <div style={{
+          marginTop: 15,
+          padding: 10,
+          border: "2px solid orange",
+          borderRadius: 5
+        }}>
+          <p><b>Need help from a real teacher?</b></p>
 
-          <button onClick={() => setShowLeadForm(true)}>Yes</button>
-          <button onClick={rejectTeacher} style={{ marginLeft: 10 }}>No</button>
-        </div>
-      )}
+          <button onClick={() => handleEscalation("yes")}>
+            Yes
+          </button>
 
-      {/* LEAD FORM */}
-      {showLeadForm && (
-        <div style={{ marginTop: 20 }}>
-          <input placeholder="Name" value={name} onChange={(e) => setName(e.target.value)} />
-          <input placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} />
-          <input placeholder="Phone" value={phone} onChange={(e) => setPhone(e.target.value)} />
-          <button onClick={submitLead}>Submit</button>
+          <button
+            onClick={() => handleEscalation("no")}
+            style={{ marginLeft: 10 }}
+          >
+            No
+          </button>
         </div>
       )}
 

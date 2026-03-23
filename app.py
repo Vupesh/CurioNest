@@ -50,14 +50,53 @@ def domain_config():
     return jsonify({
         "education": {
             "CBSE": {
-                "physics": ["electricity","magnetic_effects_of_current"],
-                "chemistry": ["chemical_bonding"],
-                "biology": ["life_processes"]
+                "physics": [
+                    "light_reflection_refraction",
+                    "human_eye_colourful_world",
+                    "electricity",
+                    "magnetic_effects_of_current"
+                ],
+                "chemistry": [
+                    "chemical_reactions_equations",
+                    "acids_bases_salts",
+                    "metals_non_metals",
+                    "carbon_compounds"
+                ],
+                "biology": [
+                    "life_processes",
+                    "control_coordination",
+                    "reproduction",
+                    "heredity"
+                ]
             },
             "ICSE": {
-                "physics": ["work_power_energy","light","modern_physics"],
-                "chemistry": ["chemical_bonding"],
-                "biology": ["plant_physiology"]
+                "physics": [
+                    "force",
+                    "work_power_energy",
+                    "light",
+                    "sound",
+                    "electricity_magnetism",
+                    "modern_physics"
+                ],
+                "chemistry": [
+                    "periodic_properties",
+                    "chemical_bonding",
+                    "acids_bases_salts",
+                    "analytical_chemistry",
+                    "mole_concept",
+                    "electrolysis",
+                    "metallurgy",
+                    "study_of_compounds",
+                    "organic_chemistry"
+                ],
+                "biology": [
+                    "basic_biology",
+                    "plant_physiology",
+                    "human_anatomy",
+                    "population",
+                    "human_evolution",
+                    "pollution"
+                ]
             }
         }
     })
