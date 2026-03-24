@@ -59,9 +59,9 @@ class StudentSupportAgentV5:
         if not chapter:
             return False
 
-        # strict keywords per chapter (extend later)
         keywords = {
             "electricity": ["current", "voltage", "resistance", "ohm"],
+            "acid_bases_salts": ["acid", "base", "salt", "ph", "alkaline"],
             "heredity": ["gene", "dna", "trait", "inherit"],
             "light": ["reflection", "refraction", "lens"],
             "work_power_energy": ["work", "energy", "power"]
@@ -80,22 +80,25 @@ class StudentSupportAgentV5:
         q = q.lower().strip()
         last_q = self.session_last_q.get(sid, "")
 
-        # REPEAT
+        # REPEAT DETECTION
         if last_q and self._similar(q, last_q) > 0.85:
             self.session_last_q[sid] = q
             return "CONFUSION"
 
         self.session_last_q[sid] = q
 
-        # TEACHER
+        # TEACHER INTENT
         if any(w in q for w in ["teacher", "help me", "talk to teacher"]):
             return "HELP"
 
         # FRUSTRATION
-        if any(w in q for w in ["why repeating", "again same", "not helpful"]):
+        if any(w in q for w in [
+            "why repeating", "again same",
+            "not helpful", "useless"
+        ]):
             return "FRUSTRATION"
 
-        # CONFUSION WORDS
+        # CONFUSION
         if any(w in q for w in [
             "dont understand", "not understand",
             "confused", "explain again"
@@ -129,7 +132,7 @@ class StudentSupportAgentV5:
         if self._is_wrong_subject(q, context.get("chapter", "")):
             return {
                 "type": "message",
-                "message": "This is from another chapter. Please switch to the correct subject/chapter 😊"
+                "message": "This is from another chapter. Please ask under the correct subject/chapter 😊"
             }
 
         # HELP → ESCALATE
@@ -190,19 +193,42 @@ class StudentSupportAgentV5:
                     "message": "This topic needs personal guidance. Want to connect with a teacher?"
                 }
 
-        # CACHE
-        cached = self.cache.lookup(question, context)
-        if cached:
+        # ================= CACHE =================
+        try:
+            cached = self.cache.lookup(question, context)
+            if cached:
+                return {
+                    "type": "message",
+                    "message": cached
+                }
+        except:
+            pass
+
+        # ================= RAG =================
+        try:
+            answer = self.rag.query(question, context)
+
+            if not answer or "teacher guidance" in answer.lower():
+                return {
+                    "type": "escalation",
+                    "message": "This topic goes beyond this chapter. Want help from a teacher?"
+                }
+
+            answer = clean(answer)
+
+        except Exception as e:
+            print("RAG ERROR:", e)
+
             return {
-                "type": "message",
-                "message": cached
+                "type": "escalation",
+                "message": "This topic may need personal guidance. Want to connect with a teacher?"
             }
 
-        # RAG (CONTROLLED)
-        answer = self.rag.query(question, context)
-        answer = clean(answer)
-
-        self.cache.store(question, answer, context)
+        # STORE CACHE
+        try:
+            self.cache.store(question, answer, context)
+        except:
+            pass
 
         return {
             "type": "message",
