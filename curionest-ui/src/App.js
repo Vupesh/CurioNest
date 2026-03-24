@@ -5,9 +5,7 @@ const API = "http://127.0.0.1:5000";
 
 function App() {
 
-  // ================= STATE =================
   const [config, setConfig] = useState({});
-
   const [board, setBoard] = useState("");
   const [subject, setSubject] = useState("");
   const [chapter, setChapter] = useState("");
@@ -18,33 +16,20 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [showEscalation, setShowEscalation] = useState(false);
 
-  // ================= LOAD CONFIG =================
   useEffect(() => {
     axios.get(`${API}/domain-config`)
-      .then(res => {
-        setConfig(res.data.education || {});
-      })
-      .catch(() => {
-        alert("Failed to load configuration");
-      });
+      .then(res => setConfig(res.data.education || {}))
+      .catch(() => alert("Config load failed"));
   }, []);
 
-  // ================= DERIVED =================
   const boards = Object.keys(config);
+  const subjects = board ? Object.keys(config[board] || {}) : [];
+  const chapters = board && subject ? config[board][subject] || [] : [];
 
-  const subjects = board && config[board]
-    ? Object.keys(config[board])
-    : [];
-
-  const chapters = board && subject && config[board]?.[subject]
-    ? config[board][subject]
-    : [];
-
-  // ================= ASK =================
   const askQuestion = async () => {
 
     if (!board || !subject || !chapter) {
-      alert("Please select Board, Subject and Chapter");
+      alert("Select Board, Subject, Chapter");
       return;
     }
 
@@ -52,9 +37,7 @@ function App() {
 
     const q = question;
 
-    // Add user message
     setMessages(prev => [...prev, { role: "user", text: q }]);
-
     setQuestion("");
     setLoading(true);
     setShowEscalation(false);
@@ -70,13 +53,11 @@ function App() {
 
       const data = res.data;
 
-      // Add AI response
       setMessages(prev => [
         ...prev,
         { role: "ai", text: data.message }
       ]);
 
-      // Escalation UI trigger
       if (data.type === "escalation") {
         setShowEscalation(true);
       }
@@ -84,128 +65,82 @@ function App() {
     } catch {
       setMessages(prev => [
         ...prev,
-        { role: "ai", text: "Something went wrong. Try again." }
+        { role: "ai", text: "System error. Try again." }
       ]);
     }
 
     setLoading(false);
   };
 
-  // ================= ESCALATION ACTIONS =================
   const handleEscalation = (choice) => {
 
     if (choice === "yes") {
+      axios.post(`${API}/capture-lead`, {
+        session_id: "session_1"
+      });
       setMessages(prev => [
         ...prev,
-        { role: "ai", text: "Great 👍 A teacher will reach out to you soon." }
+        { role: "ai", text: "Teacher will contact you soon 👍" }
       ]);
     } else {
       setMessages(prev => [
         ...prev,
-        { role: "ai", text: "No problem 👍 Let’s continue learning." }
+        { role: "ai", text: "Alright 👍 Let’s continue." }
       ]);
     }
 
     setShowEscalation(false);
   };
 
-  // ================= UI =================
   return (
     <div style={{ padding: 20, maxWidth: 800, margin: "auto" }}>
 
       <h2>CurioNest</h2>
 
-      {/* DROPDOWNS */}
-      <div style={{ marginBottom: 10 }}>
-        <select
-          value={board}
-          onChange={(e) => {
-            setBoard(e.target.value);
-            setSubject("");
-            setChapter("");
-          }}
-        >
-          <option value="">Select Board</option>
-          {boards.map(b => (
-            <option key={b} value={b}>{b}</option>
-          ))}
+      <div>
+        <select value={board} onChange={e => {
+          setBoard(e.target.value);
+          setSubject("");
+          setChapter("");
+        }}>
+          <option value="">Board</option>
+          {boards.map(b => <option key={b}>{b}</option>)}
         </select>
 
-        <select
-          value={subject}
-          onChange={(e) => {
-            setSubject(e.target.value);
-            setChapter("");
-          }}
-          style={{ marginLeft: 10 }}
-        >
-          <option value="">Select Subject</option>
-          {subjects.map(s => (
-            <option key={s} value={s}>{s}</option>
-          ))}
+        <select value={subject} onChange={e => {
+          setSubject(e.target.value);
+          setChapter("");
+        }}>
+          <option value="">Subject</option>
+          {subjects.map(s => <option key={s}>{s}</option>)}
         </select>
 
-        <select
-          value={chapter}
-          onChange={(e) => setChapter(e.target.value)}
-          style={{ marginLeft: 10 }}
-        >
-          <option value="">Select Chapter</option>
-          {chapters.map(c => (
-            <option key={c} value={c}>{c}</option>
-          ))}
+        <select value={chapter} onChange={e => setChapter(e.target.value)}>
+          <option value="">Chapter</option>
+          {chapters.map(c => <option key={c}>{c}</option>)}
         </select>
       </div>
 
-      {/* CHAT WINDOW */}
-      <div style={{
-        border: "1px solid #ccc",
-        padding: 10,
-        minHeight: 300,
-        marginBottom: 10
-      }}>
+      <div style={{ marginTop: 20, border: "1px solid #ccc", padding: 10, minHeight: 300 }}>
         {messages.map((m, i) => (
-          <p key={i}>
-            <b>{m.role === "user" ? "You" : "CurioNest"}:</b> {m.text}
-          </p>
+          <p key={i}><b>{m.role === "user" ? "You" : "CurioNest"}:</b> {m.text}</p>
         ))}
-
         {loading && <p><i>Thinking...</i></p>}
       </div>
 
-      {/* INPUT */}
       <textarea
-        rows="3"
-        style={{ width: "100%" }}
         value={question}
-        onChange={(e) => setQuestion(e.target.value)}
-        placeholder="Ask your doubt..."
+        onChange={e => setQuestion(e.target.value)}
+        style={{ width: "100%", marginTop: 10 }}
       />
 
-      <button onClick={askQuestion} style={{ marginTop: 10 }}>
-        Ask
-      </button>
+      <button onClick={askQuestion}>Ask</button>
 
-      {/* ESCALATION UI */}
       {showEscalation && (
-        <div style={{
-          marginTop: 15,
-          padding: 10,
-          border: "2px solid orange",
-          borderRadius: 5
-        }}>
-          <p><b>Need help from a real teacher?</b></p>
-
-          <button onClick={() => handleEscalation("yes")}>
-            Yes
-          </button>
-
-          <button
-            onClick={() => handleEscalation("no")}
-            style={{ marginLeft: 10 }}
-          >
-            No
-          </button>
+        <div style={{ border: "2px solid orange", padding: 10, marginTop: 10 }}>
+          <p>Need help from a teacher?</p>
+          <button onClick={() => handleEscalation("yes")}>Yes</button>
+          <button onClick={() => handleEscalation("no")}>No</button>
         </div>
       )}
 

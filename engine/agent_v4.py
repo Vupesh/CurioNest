@@ -24,10 +24,10 @@ def clean(text):
     return text.strip()
 
 
-# ================= AGENT =================
 class StudentSupportAgentV5:
 
     def __init__(self, rag_store, session_engine):
+
         self.rag = rag_store
         self.session = session_engine
 
@@ -38,6 +38,7 @@ class StudentSupportAgentV5:
 
         self.session_confusion = {}
         self.session_escalated = {}
+        self.session_rejected = {}
         self.session_last_q = {}
 
     # ================= SIMILAR =================
@@ -48,20 +49,21 @@ class StudentSupportAgentV5:
     def _is_small_talk(self, q):
         small = [
             "hi", "hello", "hey", "hellow",
-            "haha", "lol", "good morning",
-            "good evening"
+            "haha", "lol", "good morning", "good evening"
         ]
         return q in small or len(q.split()) <= 2
 
     # ================= SUBJECT GUARD =================
     def _is_wrong_subject(self, q, chapter):
+
         if not chapter:
             return False
 
+        # strict keywords per chapter (extend later)
         keywords = {
             "electricity": ["current", "voltage", "resistance", "ohm"],
-            "light": ["reflection", "refraction", "mirror", "lens"],
-            "magnetic_effects_of_current": ["magnet", "field", "coil"],
+            "heredity": ["gene", "dna", "trait", "inherit"],
+            "light": ["reflection", "refraction", "lens"],
             "work_power_energy": ["work", "energy", "power"]
         }
 
@@ -78,14 +80,14 @@ class StudentSupportAgentV5:
         q = q.lower().strip()
         last_q = self.session_last_q.get(sid, "")
 
-        # REPEAT DETECTION
+        # REPEAT
         if last_q and self._similar(q, last_q) > 0.85:
             self.session_last_q[sid] = q
             return "CONFUSION"
 
         self.session_last_q[sid] = q
 
-        # TEACHER INTENT
+        # TEACHER
         if any(w in q for w in ["teacher", "help me", "talk to teacher"]):
             return "HELP"
 
@@ -93,7 +95,7 @@ class StudentSupportAgentV5:
         if any(w in q for w in ["why repeating", "again same", "not helpful"]):
             return "FRUSTRATION"
 
-        # CONFUSION
+        # CONFUSION WORDS
         if any(w in q for w in [
             "dont understand", "not understand",
             "confused", "explain again"
@@ -104,29 +106,6 @@ class StudentSupportAgentV5:
             return "SMALL_TALK"
 
         return "NORMAL"
-
-    # ================= LLM RESPONSE =================
-    def _llm_answer(self, question, context):
-
-        prompt = f"""
-You are a friendly school tutor.
-
-Explain in:
-- 2 to 3 lines max
-- simple language
-- 1 example
-
-No "Definition / Key Idea" format.
-
-Question: {question}
-"""
-
-        res = self.client.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=[{"role": "user", "content": prompt}]
-        )
-
-        return res.choices[0].message.content.strip()
 
     # ================= MAIN =================
     def receive_question(self, question, context, session_id):
@@ -146,11 +125,11 @@ Question: {question}
                 "message": "Hey 😊 Ask me anything from your chapter!"
             }
 
-        # SUBJECT GUARD
+        # SUBJECT GUARD (HARD BLOCK)
         if self._is_wrong_subject(q, context.get("chapter", "")):
             return {
                 "type": "message",
-                "message": "This seems from another chapter. Please ask under the correct chapter 😊"
+                "message": "This is from another chapter. Please switch to the correct subject/chapter 😊"
             }
 
         # HELP → ESCALATE
@@ -170,7 +149,7 @@ Question: {question}
 
             return {
                 "type": "escalation",
-                "message": "I’ll connect you with a teacher for better help."
+                "message": "I’ll connect you with a teacher."
             }
 
         # FRUSTRATION
@@ -180,12 +159,12 @@ Question: {question}
             if self.session_confusion[sid] >= 2:
                 return {
                     "type": "escalation",
-                    "message": "Looks like this needs personal guidance. Want me to connect you with a teacher?"
+                    "message": "This seems confusing. Want help from a teacher?"
                 }
 
             return {
                 "type": "message",
-                "message": "Got it 👍 Let me explain it in a simpler way."
+                "message": "Got it 👍 Let me explain differently."
             }
 
         # CONFUSION FLOW
@@ -208,7 +187,7 @@ Question: {question}
 
                 return {
                     "type": "escalation",
-                    "message": "This topic may need personal guidance. Want to talk to a teacher?"
+                    "message": "This topic needs personal guidance. Want to connect with a teacher?"
                 }
 
         # CACHE
@@ -219,8 +198,8 @@ Question: {question}
                 "message": cached
             }
 
-        # LLM
-        answer = self._llm_answer(question, context)
+        # RAG (CONTROLLED)
+        answer = self.rag.query(question, context)
         answer = clean(answer)
 
         self.cache.store(question, answer, context)

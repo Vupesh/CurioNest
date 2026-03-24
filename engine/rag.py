@@ -1,156 +1,84 @@
 import os
+from openai import OpenAI
 import chromadb
-from chromadb.config import Settings
-from services.logging_service import LoggingService
-from langchain_openai import OpenAIEmbeddings
 
-
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CHROMA_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "chroma_db"))
-
-COLLECTION_NAME = "curionest"
-
-# distance threshold for semantic filtering
-DISTANCE_THRESHOLD = float(os.getenv("RAG_DISTANCE_THRESHOLD", "0.5"))
-
-# max chunks returned
-MAX_CHUNKS = int(os.getenv("RAG_MAX_CHUNKS", "5"))
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 
 class ChromaRAGStore:
 
     def __init__(self):
 
-        os.makedirs(CHROMA_DIR, exist_ok=True)
+        self.client = OpenAI()
 
-        self.logger = LoggingService()
+        # Chroma DB init
+        self.chroma = chromadb.Client()
 
-        # ---------- Chroma Client ----------
-
-        self.client = chromadb.PersistentClient(
-            path=CHROMA_DIR,
-            settings=Settings(anonymized_telemetry=False)
+        # Collection (must match your ingest)
+        self.collection = self.chroma.get_or_create_collection(
+            name="curionest_knowledge"
         )
 
-        # ---------- Embedding Model ----------
+    # ================= RETRIEVE =================
+    def retrieve(self, query, context, k=3):
 
-        try:
-            self.embedder = OpenAIEmbeddings(
-                model="text-embedding-3-small"
-            )
-        except Exception as e:
-            self.logger.log("EMBEDDING_INIT_ERROR", str(e))
-            raise e
+        subject = context.get("subject", "")
+        chapter = context.get("chapter", "")
 
-        # ---------- Collection ----------
-
-        try:
-            self.collection = self.client.get_or_create_collection(
-                name=COLLECTION_NAME,
-                metadata={"hnsw:space": "cosine"}
-            )
-        except Exception as e:
-            self.logger.log("CHROMA_COLLECTION_ERROR", str(e))
-            raise e
-
-    # =====================================================
-    # SEARCH
-    # =====================================================
-
-    def search(self, query, subject, chapter=None, k=None):
-
-        if not query or not subject:
-            return []
-
-        k = k or MAX_CHUNKS
-
-        # ---------- EMBEDDING ----------
-
-        try:
-            query_embedding = self.embedder.embed_query(query)
-        except Exception as e:
-            self.logger.log("EMBEDDING_FAILURE", str(e))
-            return []
-
-        # ---------- QUERY ----------
-
-        try:
-
-            where_filter = {"subject": subject}
-
-            if chapter:
-                where_filter["chapter"] = chapter
-
-            res = self.collection.query(
-                query_embeddings=[query_embedding],
-                n_results=k,
-                where=where_filter,
-                include=["documents", "distances"]
-            )
-
-        except Exception as e:
-            self.logger.log("RAG_QUERY_FAILURE", str(e))
-            return []
-
-        documents = res.get("documents")
-        distances = res.get("distances")
-
-        # ---------- NO RESULT ----------
-
-        if not documents or not documents[0]:
-
-            self.logger.log("RAG_EMPTY_RESULT", {
-                "query": query[:80],
+        results = self.collection.query(
+            query_texts=[query],
+            n_results=k,
+            where={
                 "subject": subject,
                 "chapter": chapter
-            })
+            }
+        )
 
-            return []
+        documents = results.get("documents", [[]])[0]
 
-        docs = documents[0]
+        return documents
 
-        # Ensure distances always match docs length
-        if distances and distances[0]:
-            dists = distances[0]
-        else:
-            dists = [None] * len(docs)
+    # ================= GENERATE =================
+    def generate(self, query, docs):
 
-        # ---------- FILTER ----------
+        context_text = "\n".join(docs)
 
-        filtered_docs = []
+        prompt = f"""
+You are a helpful school tutor.
 
-        for doc, dist in zip(docs, dists):
+STRICT RULES:
+- Answer ONLY from given context
+- If context is insufficient → say "This topic needs teacher guidance"
+- Keep answer SHORT (2–3 lines)
+- Use SIMPLE language
+- Add ONE small example
+- DO NOT use "Definition / Key Idea"
 
-            # Keep if:
-            # - distance missing (fail-safe)
-            # - OR within threshold
-            if dist is None or dist <= DISTANCE_THRESHOLD:
-                filtered_docs.append(doc)
+CONTEXT:
+{context_text}
 
-        # ---------- FALLBACK (CRITICAL) ----------
+QUESTION:
+{query}
+"""
 
-        if not filtered_docs:
+        response = self.client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[
+                {"role": "user", "content": prompt}
+            ]
+        )
 
-            self.logger.log("RAG_FALLBACK_USED", {
-                "query": query[:80],
-                "reason": "all results filtered out"
-            })
+        return response.choices[0].message.content.strip()
 
-            filtered_docs = docs[:MAX_CHUNKS]
+    # ================= MAIN =================
+    def query(self, question, context):
 
-        # enforce max limit
-        filtered_docs = filtered_docs[:MAX_CHUNKS]
+        docs = self.retrieve(question, context)
 
-        # ---------- LOG ----------
+        # NO CONTEXT → FORCE ESCALATION SIGNAL
+        if not docs:
+            return "This topic needs teacher guidance."
 
-        self.logger.log("RAG_SUCCESS", {
-            "query": query[:80],
-            "subject": subject,
-            "chapter": chapter,
-            "returned_chunks": len(filtered_docs),
-            "raw_chunks": len(docs),
-            "sample_distances": dists[:3],
-            "threshold": DISTANCE_THRESHOLD
-        })
+        answer = self.generate(question, docs)
 
-        return filtered_docs
+        return answer
