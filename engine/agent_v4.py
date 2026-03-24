@@ -1,7 +1,6 @@
 import os
 import re
 from difflib import SequenceMatcher
-from openai import OpenAI
 
 from engine.cache_engine import CacheEngine
 from services.logging_service import LoggingService
@@ -10,107 +9,73 @@ from engine.lead_persistence import LeadPersistenceService
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 
-# ================= CLEAN =================
 def clean(text):
     if not text:
         return text
-
-    text = re.sub(r"\\\[(.*?)\\\]", r"\1", text)
-    text = re.sub(r"\\\((.*?)\\\)", r"\1", text)
-    text = re.sub(r"\\frac\{(.*?)\}\{(.*?)\}", r"\1/\2", text)
-    text = re.sub(r"\\[a-zA-Z]+", "", text)
     text = re.sub(r"\s+", " ", text)
-
     return text.strip()
 
 
 class StudentSupportAgentV5:
 
     def __init__(self, rag_store, session_engine):
-
         self.rag = rag_store
         self.session = session_engine
 
-        self.client = OpenAI()
         self.cache = CacheEngine()
         self.logger = LoggingService()
         self.lead_persistence = LeadPersistenceService()
 
         self.session_confusion = {}
-        self.session_escalated = {}
-        self.session_rejected = {}
         self.session_last_q = {}
 
-    # ================= SIMILAR =================
+    # ---------------- SIMILAR ----------------
     def _similar(self, a, b):
         return SequenceMatcher(None, a, b).ratio()
 
-    # ================= SMALL TALK =================
-    def _is_small_talk(self, q):
-        small = [
-            "hi", "hello", "hey", "hellow",
-            "haha", "lol", "good morning", "good evening"
-        ]
-        return q in small or len(q.split()) <= 2
-
-    # ================= SUBJECT GUARD =================
-    def _is_wrong_subject(self, q, chapter):
-
-        if not chapter:
-            return False
-
-        keywords = {
-            "electricity": ["current", "voltage", "resistance", "ohm"],
-            "acid_bases_salts": ["acid", "base", "salt", "ph", "alkaline"],
-            "heredity": ["gene", "dna", "trait", "inherit"],
-            "light": ["reflection", "refraction", "lens"],
-            "work_power_energy": ["work", "energy", "power"]
-        }
-
-        for ch, words in keywords.items():
-            if ch in chapter:
-                if not any(w in q for w in words):
-                    return True
-
-        return False
-
-    # ================= INTENT =================
+    # ---------------- INTENT ----------------
     def _intent(self, q, sid):
 
         q = q.lower().strip()
         last_q = self.session_last_q.get(sid, "")
 
-        # REPEAT DETECTION
         if last_q and self._similar(q, last_q) > 0.85:
             self.session_last_q[sid] = q
             return "CONFUSION"
 
         self.session_last_q[sid] = q
 
-        # TEACHER INTENT
-        if any(w in q for w in ["teacher", "help me", "talk to teacher"]):
+        if any(w in q for w in ["teacher", "help me"]):
             return "HELP"
 
-        # FRUSTRATION
-        if any(w in q for w in [
-            "why repeating", "again same",
-            "not helpful", "useless"
-        ]):
-            return "FRUSTRATION"
-
-        # CONFUSION
-        if any(w in q for w in [
-            "dont understand", "not understand",
-            "confused", "explain again"
-        ]):
+        if any(w in q for w in ["confused", "dont understand", "again"]):
             return "CONFUSION"
 
-        if self._is_small_talk(q):
+        if any(w in q for w in ["why", "not helpful"]):
+            return "FRUSTRATION"
+
+        if len(q.split()) <= 2:
             return "SMALL_TALK"
 
         return "NORMAL"
 
-    # ================= MAIN =================
+    # ---------------- SUBJECT GUARD (SMART) ----------------
+    def _subject_score(self, q, chapter):
+
+        keywords = {
+            "electricity": ["electricity", "current", "voltage", "resistance"],
+            "acid_bases_salts": ["acid", "base", "salt", "ph", "alkaline"],
+            "heredity": ["gene", "dna", "inherit"],
+        }
+
+        for ch, words in keywords.items():
+            if ch in chapter:
+                score = sum([1 for w in words if w in q])
+                return score
+
+        return 1  # allow by default
+
+    # ---------------- MAIN ----------------
     def receive_question(self, question, context, session_id):
 
         sid = session_id
@@ -123,105 +88,62 @@ class StudentSupportAgentV5:
 
         # SMALL TALK
         if intent == "SMALL_TALK":
+            return {"type": "message", "message": "Hey 😊 Ask me anything!"}
+
+        # SUBJECT CHECK (SMART, NOT BLOCKING)
+        score = self._subject_score(q, context.get("chapter", ""))
+
+        if score == 0:
             return {
                 "type": "message",
-                "message": "Hey 😊 Ask me anything from your chapter!"
+                "message": "This seems from another chapter. Please switch subject 😊"
             }
 
-        # SUBJECT GUARD (HARD BLOCK)
-        if self._is_wrong_subject(q, context.get("chapter", "")):
-            return {
-                "type": "message",
-                "message": "This is from another chapter. Please ask under the correct subject/chapter 😊"
-            }
-
-        # HELP → ESCALATE
+        # HELP
         if intent == "HELP":
-            self.session_escalated[sid] = True
+            self.lead_persistence.upsert_lead(
+                session_id=sid,
+                question=question,
+                subject=context.get("subject"),
+                chapter=context.get("chapter"),
+                escalation_reason="HELP"
+            )
+            return {"type": "escalation", "message": "Connecting you to a teacher."}
 
-            try:
-                self.lead_persistence.upsert_lead(
-                    session_id=sid,
-                    question=question,
-                    subject=context.get("subject"),
-                    chapter=context.get("chapter"),
-                    escalation_reason="DIRECT_HELP"
-                )
-            except:
-                pass
-
-            return {
-                "type": "escalation",
-                "message": "I’ll connect you with a teacher."
-            }
-
-        # FRUSTRATION
-        if intent == "FRUSTRATION":
-            self.session_confusion[sid] += 1
-
-            if self.session_confusion[sid] >= 2:
-                return {
-                    "type": "escalation",
-                    "message": "This seems confusing. Want help from a teacher?"
-                }
-
-            return {
-                "type": "message",
-                "message": "Got it 👍 Let me explain differently."
-            }
-
-        # CONFUSION FLOW
+        # CONFUSION
         if intent == "CONFUSION":
             self.session_confusion[sid] += 1
 
             if self.session_confusion[sid] >= 3:
-                self.session_escalated[sid] = True
-
-                try:
-                    self.lead_persistence.upsert_lead(
-                        session_id=sid,
-                        question=question,
-                        subject=context.get("subject"),
-                        chapter=context.get("chapter"),
-                        escalation_reason="CONFUSION"
-                    )
-                except:
-                    pass
-
                 return {
                     "type": "escalation",
-                    "message": "This topic needs personal guidance. Want to connect with a teacher?"
+                    "message": "This needs teacher help. Want me to connect you?"
                 }
 
-        # ================= CACHE =================
+        # CACHE
         try:
             cached = self.cache.lookup(question, context)
             if cached:
-                return {
-                    "type": "message",
-                    "message": cached
-                }
+                return {"type": "message", "message": cached}
         except:
             pass
 
-        # ================= RAG =================
+        # RAG (SAFE)
         try:
             answer = self.rag.query(question, context)
 
-            if not answer or "teacher guidance" in answer.lower():
+            if not answer:
                 return {
                     "type": "escalation",
-                    "message": "This topic goes beyond this chapter. Want help from a teacher?"
+                    "message": "This needs deeper help. Want a teacher?"
                 }
 
             answer = clean(answer)
 
-        except Exception as e:
-            print("RAG ERROR:", e)
-
+        except:
             return {
                 "type": "escalation",
-                "message": "This topic may need personal guidance. Want to connect with a teacher?"
+                "message": "This is a bit advanced. Want teacher help?"
             }
 
         # STORE CACHE
@@ -230,7 +152,4 @@ class StudentSupportAgentV5:
         except:
             pass
 
-        return {
-            "type": "message",
-            "message": answer
-        }
+        return {"type": "message", "message": answer}

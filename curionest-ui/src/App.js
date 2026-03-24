@@ -129,10 +129,18 @@ function App() {
       </div>
 
       <textarea
-        value={question}
-        onChange={e => setQuestion(e.target.value)}
-        style={{ width: "100%", marginTop: 10 }}
-      />
+  rows="3"
+  style={{ width: "100%", marginTop: 10 }}
+  value={question}
+  onChange={(e) => setQuestion(e.target.value)}
+  placeholder="Ask your doubt..."
+  onKeyDown={(e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      askQuestion();
+    }
+  }}
+/>
 
       <button onClick={askQuestion}>Ask</button>
 
