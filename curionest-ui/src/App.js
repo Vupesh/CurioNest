@@ -1,6 +1,9 @@
 import React, { useState, useEffect } from "react";
 import axios from "axios";
 
+import 'katex/dist/katex.min.css';
+import { InlineMath, BlockMath } from 'react-katex';
+
 const API = "http://127.0.0.1:5000";
 
 function App() {
@@ -16,6 +19,7 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [showEscalation, setShowEscalation] = useState(false);
 
+  // ================= CONFIG =================
   useEffect(() => {
     axios.get(`${API}/domain-config`)
       .then(res => setConfig(res.data.education || {}))
@@ -26,6 +30,7 @@ function App() {
   const subjects = board ? Object.keys(config[board] || {}) : [];
   const chapters = board && subject ? config[board][subject] || [] : [];
 
+  // ================= ASK =================
   const askQuestion = async () => {
 
     if (!board || !subject || !chapter) {
@@ -72,16 +77,19 @@ function App() {
     setLoading(false);
   };
 
+  // ================= ESCALATION =================
   const handleEscalation = (choice) => {
 
     if (choice === "yes") {
       axios.post(`${API}/capture-lead`, {
         session_id: "session_1"
       });
+
       setMessages(prev => [
         ...prev,
         { role: "ai", text: "Teacher will contact you soon 👍" }
       ]);
+
     } else {
       setMessages(prev => [
         ...prev,
@@ -92,11 +100,37 @@ function App() {
     setShowEscalation(false);
   };
 
+  // ================= MESSAGE RENDERER =================
+  const renderMessage = (text) => {
+
+    if (!text) return null;
+
+    // Block math $$...$$
+    if (text.includes("$$")) {
+      const parts = text.split("$$");
+      return parts.map((part, i) =>
+        i % 2 === 1
+          ? <BlockMath key={i} math={part} />
+          : <span key={i}>{part}</span>
+      );
+    }
+
+    // Inline math \(...\)
+    if (text.includes("\\(")) {
+      const clean = text.replace(/\\\(|\\\)/g, "");
+      return <InlineMath math={clean} />;
+    }
+
+    return <span>{text}</span>;
+  };
+
+  // ================= UI =================
   return (
     <div style={{ padding: 20, maxWidth: 800, margin: "auto" }}>
 
       <h2>CurioNest</h2>
 
+      {/* DROPDOWNS */}
       <div>
         <select value={board} onChange={e => {
           setBoard(e.target.value);
@@ -121,29 +155,35 @@ function App() {
         </select>
       </div>
 
+      {/* CHAT */}
       <div style={{ marginTop: 20, border: "1px solid #ccc", padding: 10, minHeight: 300 }}>
         {messages.map((m, i) => (
-          <p key={i}><b>{m.role === "user" ? "You" : "CurioNest"}:</b> {m.text}</p>
+          <p key={i}>
+            <b>{m.role === "user" ? "You" : "CurioNest"}:</b>{" "}
+            {renderMessage(m.text)}
+          </p>
         ))}
         {loading && <p><i>Thinking...</i></p>}
       </div>
 
+      {/* INPUT */}
       <textarea
-  rows="3"
-  style={{ width: "100%", marginTop: 10 }}
-  value={question}
-  onChange={(e) => setQuestion(e.target.value)}
-  placeholder="Ask your doubt..."
-  onKeyDown={(e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      askQuestion();
-    }
-  }}
-/>
+        rows="3"
+        style={{ width: "100%", marginTop: 10 }}
+        value={question}
+        onChange={(e) => setQuestion(e.target.value)}
+        placeholder="Ask your doubt..."
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            askQuestion();
+          }
+        }}
+      />
 
       <button onClick={askQuestion}>Ask</button>
 
+      {/* ESCALATION */}
       {showEscalation && (
         <div style={{ border: "2px solid orange", padding: 10, marginTop: 10 }}>
           <p>Need help from a teacher?</p>

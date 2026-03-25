@@ -12,7 +12,10 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 def clean(text):
     if not text:
         return text
+
+    # Preserve LaTeX for KaTeX
     text = re.sub(r"\s+", " ", text)
+
     return text.strip()
 
 
