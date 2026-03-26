@@ -34,6 +34,9 @@ class StudentSupportAgentV5:
     TEACH_REQUEST_WORDS = {
         "teach me", "teach me basics", "basics", "explain basics", "first explain", "help me understand",
     }
+    HELP_CONFIRM_WORDS = {
+        "connect now", "call me now", "yes connect", "yes teacher", "talk to teacher now",
+    }
     CONVERSATIONAL_WORDS = {
         "all fine now", "what else you need", "i selected", "are you there",
         "can we continue", "okay now", "ok now", "hello there", "chapter subjects are all correct",
@@ -67,9 +70,24 @@ class StudentSupportAgentV5:
         if not q:
             return "LEARNING"
 
+        llm_intent = "UNKNOWN"
+        llm_confidence = 0.0
+        try:
+            inferred = self.rag.infer_intent(q)
+            llm_intent = inferred.get("intent", "UNKNOWN")
+            llm_confidence = float(inferred.get("confidence", 0.0))
+        except Exception:
+            pass
+
         last_q = self.session_last_q.get(sid, "")
         repeated_question = bool(last_q) and self._similar(q, last_q) > 0.88
         self.session_last_q[sid] = q
+
+        if llm_confidence >= 0.75 and llm_intent in {
+            "GREETING", "CONVERSATIONAL", "TEACH_REQUEST", "EXAM_SUPPORT",
+            "HELP", "CONFUSION", "FRUSTRATION", "LEARNING"
+        }:
+            return llm_intent
 
         if any(q.startswith(greet) for greet in self.GREETING_WORDS):
             return "GREETING"
@@ -77,6 +95,8 @@ class StudentSupportAgentV5:
             return "CONVERSATIONAL"
         if self._contains_any(q, self.TEACH_REQUEST_WORDS):
             return "TEACH_REQUEST"
+        if self._contains_any(q, self.HELP_CONFIRM_WORDS):
+            return "HELP_CONFIRM"
         if self._contains_any(q, self.EXAM_SUPPORT_WORDS):
             return "EXAM_SUPPORT"
         if self._contains_any(q, self.HELP_WORDS) and any(w in q for w in ["what", "how", "why", "explain", "understand"]):
@@ -159,6 +179,7 @@ class StudentSupportAgentV5:
     def receive_question(self, question, context, session_id):
         sid = session_id or "default"
         question = (question or "").strip()
+        selection_valid = context.get("selection_valid", True)
 
         if sid not in self.session_confusion:
             self.session_confusion[sid] = 0
@@ -184,6 +205,15 @@ class StudentSupportAgentV5:
                 "message": (
                     "Yes, all set ✅ I am ready. Ask your chapter doubt in one line, "
                     "or ask exam strategy and I will guide you step by step."
+                ),
+            }
+
+        if not selection_valid and intent not in {"GREETING", "CONVERSATIONAL"}:
+            return {
+                "type": "message",
+                "message": (
+                    "I can still guide you briefly, but for syllabus-accurate teaching please select "
+                    "Board > Subject > Chapter."
                 ),
             }
 
@@ -229,15 +259,21 @@ class StudentSupportAgentV5:
         if intent in {"LEARNING", "CONFUSION", "FRUSTRATION", "HELP_WITH_DOUBT", "HELP"}:
             self.session_last_learning_query[sid] = question
 
-        if intent == "EXAM_SUPPORT":
+        if intent == "HELP_CONFIRM":
             self._persist_escalation_signal(
                 sid,
                 question,
                 context,
-                reason="Student asked for exam-performance guidance",
-                code="EXAM_GUIDANCE",
-                confidence=0.8,
+                reason="Student confirmed teacher connection",
+                code="HELP_CONFIRMED",
+                confidence=0.95,
             )
+            return {
+                "type": "escalation",
+                "message": "Got it. I’m connecting you to an expert teacher now.",
+            }
+
+        if intent == "EXAM_SUPPORT":
             return {
                 "type": "message",
                 "message": self._exam_support_reply(context),
@@ -254,17 +290,12 @@ class StudentSupportAgentV5:
             }
 
         if intent == "HELP":
-            self._persist_escalation_signal(
-                sid,
-                question,
-                context,
-                reason="Direct teacher request",
-                code="HELP_REQUEST",
-                confidence=0.95,
-            )
             return {
-                "type": "escalation",
-                "message": "Got it — I can connect you to a teacher now. Would you like that?",
+                "type": "message",
+                "message": (
+                    "Absolutely — I can connect you with an expert teacher. "
+                    "Would you like a quick explanation first, or should I connect now?"
+                ),
             }
 
         if intent == "FRUSTRATION":

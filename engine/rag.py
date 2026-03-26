@@ -1,4 +1,5 @@
 import os
+import json
 
 import chromadb
 from chromadb.config import Settings
@@ -79,6 +80,39 @@ QUESTION:
             return (response.choices[0].message.content or "").strip()
         except Exception:
             return None
+
+    def infer_intent(self, question):
+        prompt = f"""
+Classify the student message intent for an education tutor lead-flow.
+Return strict JSON only with keys:
+- intent: one of ["GREETING","LEARNING","CONFUSION","FRUSTRATION","HELP","EXAM_SUPPORT","CONVERSATIONAL","UNKNOWN"]
+- confidence: float between 0 and 1
+
+Rules:
+- HELP only when user explicitly asks to connect/call/talk to teacher/human expert.
+- EXAM_SUPPORT for score/marks/strategy planning.
+- CONFUSION when user says not clear/repeat/again.
+- FRUSTRATION for emotional stress/urgency signals.
+- CONVERSATIONAL for meta chat like "all good now?", "what else you need?".
+- GREETING for hello/hi/hey style openers.
+
+Student message:
+{question}
+"""
+        try:
+            response = self.client.chat.completions.create(
+                model=OPENAI_MODEL,
+                temperature=0,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            raw = (response.choices[0].message.content or "").strip()
+            data = json.loads(raw)
+            return {
+                "intent": (data.get("intent") or "UNKNOWN").upper(),
+                "confidence": float(data.get("confidence", 0.0)),
+            }
+        except Exception:
+            return {"intent": "UNKNOWN", "confidence": 0.0}
 
     def query(self, question, context):
         docs, _ = self.retrieve(question, context)

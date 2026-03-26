@@ -98,6 +98,8 @@ def _ensure_agent():
 
 
 def _is_valid_selection(board, subject, chapter):
+    if not board or not subject or not chapter:
+        return False
     board_map = DOMAIN_CONFIG["education"].get(board.upper())
     if not board_map:
         return False
@@ -141,29 +143,13 @@ def ask_question():
         if not question:
             return jsonify({"type": "message", "message": "Please type your question first."}), 200
 
-        if not board or not subject or not chapter:
-            return jsonify(
-                {
-                    "type": "message",
-                    "message": (
-                        "I’m ready to help 👍 Please select Board > Subject > Chapter first, "
-                        "then ask your doubt or exam goal."
-                    ),
-                }
-            ), 200
-
-        if not _is_valid_selection(board, subject, chapter):
-            return jsonify(
-                {
-                    "type": "message",
-                    "message": "Selection is not valid. Please ask under correct subject > chapter",
-                }
-            ), 200
+        selection_valid = _is_valid_selection(board, subject, chapter)
 
         context = {
             "board": board.lower(),
             "subject": subject.lower(),
             "chapter": chapter.lower(),
+            "selection_valid": selection_valid,
         }
 
         logger.log(
@@ -173,6 +159,7 @@ def ask_question():
                 "board": board,
                 "subject": subject,
                 "chapter": chapter,
+                "selection_valid": selection_valid,
                 "question": question[:160],
             },
         )

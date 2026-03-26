@@ -93,15 +93,6 @@ function App() {
     setLoading(true);
     setShowEscalation(false);
 
-    if (!board || !subject || !chapter) {
-      setMessages((prev) => [
-        ...prev,
-        { role: "ai", text: "Please select Board > Subject > Chapter so I can guide you properly." },
-      ]);
-      setLoading(false);
-      return;
-    }
-
     try {
       const res = await axios.post(`${apiBase}/ask-question`, {
         session_id: sessionId,
@@ -112,7 +103,10 @@ function App() {
       });
 
       const data = res.data || {};
-      setMessages((prev) => [...prev, { role: "ai", text: data.message || "Let me try again." }]);
+      const reminder = (!board || !subject || !chapter)
+        ? " (Tip: select Board > Subject > Chapter for exact syllabus guidance.)"
+        : "";
+      setMessages((prev) => [...prev, { role: "ai", text: `${data.message || "Let me try again."}${reminder}` }]);
       if (data.type === "escalation") setShowEscalation(true);
     } catch {
       const lower = q.toLowerCase().trim();
