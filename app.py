@@ -19,9 +19,8 @@ app = Flask(__name__)
 CORS(app)
 logger = LoggingService()
 
-rag_store = ChromaRAGStore()
-session_memory = SessionMemoryService()
-agent = StudentSupportAgentV5(rag_store=rag_store, session_engine=session_memory)
+agent = None
+agent_boot_error = None
 
 DOMAIN_CONFIG = {
     "education": {
@@ -82,6 +81,22 @@ def get_conn():
     return psycopg2.connect(os.getenv("DATABASE_URL"))
 
 
+def _ensure_agent():
+    global agent, agent_boot_error
+    if agent is not None:
+        return agent
+    try:
+        rag_store = ChromaRAGStore()
+        session_memory = SessionMemoryService()
+        agent = StudentSupportAgentV5(rag_store=rag_store, session_engine=session_memory)
+        agent_boot_error = None
+        return agent
+    except Exception as exc:
+        agent_boot_error = str(exc)
+        logger.log("AGENT_BOOT_FAILED", agent_boot_error)
+        return None
+
+
 def _is_valid_selection(board, subject, chapter):
     board_map = DOMAIN_CONFIG["education"].get(board.upper())
     if not board_map:
@@ -90,6 +105,11 @@ def _is_valid_selection(board, subject, chapter):
     if not chapters:
         return False
     return chapter.lower() in [c.lower() for c in chapters]
+
+
+def _is_greeting(text):
+    t = (text or "").strip().lower()
+    return t in {"hi", "hello", "hey", "hii", "yo", "good morning", "good evening"}
 
 
 @app.route("/", methods=["GET"])
@@ -105,8 +125,20 @@ def domain_config():
 @app.route("/ask-question", methods=["POST"])
 def ask_question():
     try:
+        active_agent = _ensure_agent()
+        if active_agent is None:
+            return jsonify(
+                {
+                    "type": "message",
+                    "message": (
+                        "Tutor service is warming up right now. Please try again in a moment."
+                    ),
+                }
+            ), 200
+
         data = request.get_json() or {}
         session_id = data.get("session_id", "default")
+        funnel_stage = (data.get("funnel_stage") or "awareness").strip().lower()
         board = (data.get("board") or "").strip()
         subject = (data.get("subject") or "").strip()
         chapter = (data.get("chapter") or "").strip()
@@ -116,12 +148,31 @@ def ask_question():
             return jsonify({"type": "message", "message": "Please type your question first."}), 200
 
         if not board or not subject or not chapter:
-            return jsonify(
-                {
-                    "type": "message",
-                    "message": "Please select board, subject, and chapter before asking.",
-                }
-            ), 200
+            # First-query experience must always respond by intent (teach/reassure/guide),
+            # then gently ask for syllabus selection for precise tutoring.
+            warm_context = {
+                "board": board.lower(),
+                "subject": subject.lower(),
+                "chapter": chapter.lower(),
+                "funnel_stage": funnel_stage,
+                "unscoped": True,
+            }
+            response = active_agent.receive_question(question=question, context=warm_context, session_id=session_id)
+            base_message = (response or {}).get("message") or ""
+
+            if _is_greeting(question):
+                base_message = (
+                    "Hey 👋 I’m CurioNest. I can help students, parents, and teachers. "
+                    "Share your query and I’ll guide step by step."
+                )
+
+            selection_nudge = (
+                " For chapter-accurate learning, please select Board > Subject > Chapter."
+            )
+            response["message"] = f"{base_message}{selection_nudge}".strip()
+            response["needs_selection"] = True
+            response["funnel_stage"] = funnel_stage
+            return jsonify(response), 200
 
         if not _is_valid_selection(board, subject, chapter):
             return jsonify(
@@ -135,6 +186,7 @@ def ask_question():
             "board": board.lower(),
             "subject": subject.lower(),
             "chapter": chapter.lower(),
+            "funnel_stage": funnel_stage,
         }
 
         logger.log(
@@ -144,11 +196,12 @@ def ask_question():
                 "board": board,
                 "subject": subject,
                 "chapter": chapter,
+                "funnel_stage": funnel_stage,
                 "question": question[:160],
             },
         )
 
-        response = agent.receive_question(question=question, context=context, session_id=session_id)
+        response = active_agent.receive_question(question=question, context=context, session_id=session_id)
 
         logger.log(
             "QUESTION_RESPONSE",
@@ -159,6 +212,8 @@ def ask_question():
             },
         )
 
+        if isinstance(response, dict) and "funnel_stage" not in response:
+            response["funnel_stage"] = funnel_stage
         return jsonify(response)
 
     except Exception as e:
@@ -166,6 +221,20 @@ def ask_question():
         traceback.print_exc()
         logger.log("ASK_QUESTION_ERROR", str(e))
         return jsonify({"type": "message", "message": "I’m here. Please ask again in simple words."}), 200
+
+
+@app.route("/health", methods=["GET"])
+def health():
+    active_agent = _ensure_agent()
+    status = "ok" if active_agent is not None else "degraded"
+    return jsonify(
+        {
+            "status": status,
+            "service": "CurioNest API",
+            "agent_ready": active_agent is not None,
+            "agent_boot_error": agent_boot_error,
+        }
+    )
 
 
 @app.route("/capture-lead", methods=["POST"])

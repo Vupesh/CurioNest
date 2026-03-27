@@ -1,4 +1,5 @@
 import os
+import json
 
 import chromadb
 from chromadb.config import Settings
@@ -79,6 +80,51 @@ QUESTION:
             return (response.choices[0].message.content or "").strip()
         except Exception:
             return None
+
+    def classify_intent(self, question, context, attempts=1):
+        prompt = f"""
+You are an intent classifier for CurioNest (education tutor + lead generation).
+Return strict JSON only with keys:
+- intent: one of [learning, confusion, frustration, help, greeting, exam_support, off_topic]
+- confidence: float 0 to 1
+- needs_teacher: true/false
+- reason: short string
+
+Rules:
+- Prioritize teach-first.
+- For simple concept queries ("what is", "how does", "define"), set intent=learning and needs_teacher=false.
+- First query can come from student/parent/teacher; always keep it conversational and helpful.
+- If question asks for teacher directly, set intent=help and needs_teacher=true.
+- If user asks concept + teacher together, set intent=learning and needs_teacher=true.
+- For random/non-syllabus questions, set off_topic and needs_teacher=true only when advanced/urgent.
+- attempts={attempts}: if attempts >=3 and confusion present, needs_teacher=true.
+
+Board={context.get("board","")}
+Subject={context.get("subject","")}
+Chapter={context.get("chapter","")}
+Question={question}
+"""
+        try:
+            response = self.client.chat.completions.create(
+                model=OPENAI_MODEL,
+                temperature=0,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            raw = (response.choices[0].message.content or "").strip()
+            data = json.loads(raw)
+            return {
+                "intent": (data.get("intent") or "learning").lower(),
+                "confidence": float(data.get("confidence", 0.6)),
+                "needs_teacher": bool(data.get("needs_teacher", False)),
+                "reason": (data.get("reason") or "model_inference")[:120],
+            }
+        except Exception:
+            return {
+                "intent": "learning",
+                "confidence": 0.5,
+                "needs_teacher": False,
+                "reason": "fallback_classifier",
+            }
 
     def query(self, question, context):
         docs, _ = self.retrieve(question, context)

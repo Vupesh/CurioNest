@@ -3,7 +3,34 @@ import axios from "axios";
 import "katex/dist/katex.min.css";
 import { BlockMath, InlineMath } from "react-katex";
 
-const API = "http://127.0.0.1:5000";
+const API_CANDIDATES = [
+  process.env.REACT_APP_API_BASE,
+  "",
+  `${window.location.protocol}//${window.location.hostname}:5000`,
+].filter(Boolean);
+
+const FALLBACK_CONFIG = {
+  CBSE: {
+    physics: ["light_reflection_refraction", "human_eye", "electricity", "magnetic_effects_of_current"],
+    chemistry: ["chemical_reactions_equations", "acid_bases_salts", "metals_non_metals", "carbon_and_its_compounds"],
+    biology: ["life_processes", "control_coordinations", "how_do_organisms_reproduce", "heredity"],
+  },
+  ICSE: {
+    physics: ["force", "work_power_energy", "light", "sound", "electricity_magnetism", "modern_physics"],
+    chemistry: [
+      "periodic_properties",
+      "chemical_bonding",
+      "acid_bases_salt",
+      "analytical_chemistry",
+      "mole_concept_stoichiometry",
+      "electrolysis",
+      "metallurgy",
+      "study_of_compounds",
+      "organic_chemistry",
+    ],
+    biology: ["basic_biology", "plant_physiology", "human_anatomy_and_physiology", "population", "human_evolution", "polution"],
+  },
+};
 
 function App() {
   const [config, setConfig] = useState({});
@@ -18,16 +45,42 @@ function App() {
   const [showEscalation, setShowEscalation] = useState(false);
   const [showLeadForm, setShowLeadForm] = useState(false);
   const [leadForm, setLeadForm] = useState({ name: "", email: "", phone: "" });
+  const [apiBase, setApiBase] = useState(API_CANDIDATES[0] || "");
 
   const sessionId = "session_1";
+  const deriveFunnelStage = (text) => {
+    const q = (text || "").toLowerCase();
+    if (q.includes("teacher") || q.includes("expert")) return "decision";
+    if (q.includes("price") || q.includes("plan") || q.includes("contact")) return "consideration";
+    return "awareness";
+  };
 
   useEffect(() => {
-    axios
-      .get(`${API}/domain-config`)
-      .then((res) => setConfig(res.data.education || {}))
-      .catch(() => {
-        setMessages([{ role: "ai", text: "Unable to load syllabus config right now." }]);
-      });
+    const loadConfig = async () => {
+      for (const base of API_CANDIDATES) {
+        try {
+          const res = await axios.get(`${base}/domain-config`);
+          const education = res?.data?.education;
+          if (education && Object.keys(education).length > 0) {
+            setApiBase(base);
+            setConfig(education);
+            return;
+          }
+        } catch {
+          // try the next candidate
+        }
+      }
+
+      setConfig(FALLBACK_CONFIG);
+      setMessages([
+        {
+          role: "ai",
+          text: "I loaded an offline syllabus list. If answers fail, start backend and refresh once.",
+        },
+      ]);
+    };
+
+    loadConfig();
   }, []);
 
   const boards = useMemo(() => Object.keys(config), [config]);
@@ -47,19 +100,29 @@ function App() {
     setShowEscalation(false);
 
     try {
-      const res = await axios.post(`${API}/ask-question`, {
+      const res = await axios.post(`${apiBase}/ask-question`, {
         session_id: sessionId,
         board,
         subject,
         chapter,
+        funnel_stage: deriveFunnelStage(q),
         question: q,
       });
 
       const data = res.data || {};
       setMessages((prev) => [...prev, { role: "ai", text: data.message || "Let me try again." }]);
-      if (data.type === "escalation") setShowEscalation(true);
+      if (data.type === "escalation" || data.teacher_offer) setShowEscalation(true);
     } catch {
-      setMessages((prev) => [...prev, { role: "ai", text: "I’m still here. Please try once more." }]);
+      const lower = q.toLowerCase().trim();
+      let fallback = "I can’t reach the tutor service right now. Please ensure backend is running on port 5000.";
+
+      if (["hi", "hello", "hey"].includes(lower)) {
+        fallback = "Hi 👋 Please select Board > Subject > Chapter, then ask your doubt.";
+      } else if (!board || !subject || !chapter) {
+        fallback = "Please select Board > Subject > Chapter first, then I will explain simply.";
+      }
+
+      setMessages((prev) => [...prev, { role: "ai", text: fallback }]);
     } finally {
       setLoading(false);
     }
@@ -79,7 +142,7 @@ function App() {
   const submitLead = async () => {
     try {
       const payload = { ...leadForm, session_id: sessionId };
-      const res = await axios.post(`${API}/capture-lead`, payload);
+      const res = await axios.post(`${apiBase}/capture-lead`, payload);
       const message = res?.data?.message || "Lead captured.";
       setMessages((prev) => [...prev, { role: "ai", text: message }]);
       setShowLeadForm(false);
@@ -138,7 +201,7 @@ function App() {
         style={{ width: "100%", marginTop: 10, borderRadius: 8, padding: 8 }}
         value={question}
         onChange={(e) => setQuestion(e.target.value)}
-        placeholder="Ask your doubt in simple words..."
+        placeholder="Say hi or ask your doubt in simple words..."
         onKeyDown={(e) => {
           if (e.key === "Enter" && !e.shiftKey) {
             e.preventDefault();

@@ -9,20 +9,12 @@ from services.logging_service import LoggingService
 class StudentSupportAgentV5:
     """Conversation layer tuned for teaching-first, lead-conversion-later behavior."""
 
-    HELP_WORDS = {
-        "teacher", "mentor", "expert", "counsellor", "counselor", "call me",
-        "connect me", "talk to teacher", "need teacher", "human support",
-    }
-    CONFUSION_WORDS = {
-        "confused", "again", "repeat", "didn't understand", "dont understand",
-        "not clear", "explain again", "can you re explain", "hard to understand",
-    }
-    FRUSTRATION_WORDS = {
-        "not helpful", "useless", "frustrated", "annoyed", "stuck", "fed up",
-    }
-    EMOTIONAL_SIGNAL_WORDS = {
-        "scared", "afraid", "anxious", "panic", "stressed", "urgent", "exam tomorrow",
-        "failing", "i will fail", "crying", "pressure", "very worried",
+    GREETING_WORDS = {"hi", "hello", "hey", "good morning", "good evening", "yo"}
+    CONFUSION_HINTS = {"again", "confused", "not clear", "explain again", "didn't understand"}
+    SUBJECT_KEYWORDS = {
+        "physics": {"friction", "force", "energy", "work", "power", "motion", "electricity", "magnetism", "current"},
+        "chemistry": {"atom", "molecule", "reaction", "acid", "base", "salt", "bond", "organic", "compound"},
+        "biology": {"cell", "organ", "plant", "human", "reproduction", "heredity", "life", "physiology"},
     }
 
     def __init__(self, rag_store, session_engine):
@@ -35,43 +27,79 @@ class StudentSupportAgentV5:
         self.session_confusion = {}
         self.session_last_q = {}
         self.session_attempts = {}
+        self.session_last_learning_query = {}
 
     def _similar(self, a, b):
         return SequenceMatcher(None, a, b).ratio()
 
-    def _contains_any(self, text, phrases):
-        return any(p in text for p in phrases)
+    def _looks_like_basic_learning(self, q):
+        q = (q or "").lower()
+        starters = ("what is", "what are", "how does", "explain", "define", "tell me about")
+        return q.startswith(starters) or "basics" in q or "basic" in q
 
-    def _intent(self, q, sid):
-        q = (q or "").lower().strip()
+    def _infer_intent(self, question, context, sid):
+        q = (question or "").lower().strip()
         if not q:
-            return "LEARNING"
+            return {"intent": "learning", "needs_teacher": False, "confidence": 0.5, "reason": "empty"}
 
+        if any(q.startswith(greet) for greet in self.GREETING_WORDS):
+            return {"intent": "greeting", "needs_teacher": False, "confidence": 0.95, "reason": "greeting"}
+
+        attempts = self.session_attempts.get(sid, 1)
+        model_intent = self.rag.classify_intent(question, context, attempts=attempts)
+
+        if self._looks_like_basic_learning(q) and attempts <= 2:
+            model_intent["intent"] = "learning"
+            model_intent["needs_teacher"] = False
+            model_intent["reason"] = "teach_first_basic_query"
+
+        # Safety fallback when classifier becomes uncertain.
         last_q = self.session_last_q.get(sid, "")
-        repeated_question = bool(last_q) and self._similar(q, last_q) > 0.88
+        repeated = bool(last_q) and self._similar(q, last_q) > 0.9
         self.session_last_q[sid] = q
-
-        if self._contains_any(q, self.HELP_WORDS):
-            return "HELP"
-        if self._contains_any(q, self.EMOTIONAL_SIGNAL_WORDS):
-            return "FRUSTRATION"
-        if repeated_question or self._contains_any(q, self.CONFUSION_WORDS):
-            return "CONFUSION"
-        if self._contains_any(q, self.FRUSTRATION_WORDS):
-            return "FRUSTRATION"
-        return "LEARNING"
+        if repeated and not model_intent.get("needs_teacher"):
+            model_intent["intent"] = "confusion"
+            model_intent["reason"] = "repeat_detected"
+        if any(h in q for h in self.CONFUSION_HINTS):
+            model_intent["intent"] = "confusion"
+        return model_intent
 
     def _subject_in_scope(self, question, context):
         """Soft subject/chapter control: teach lightly, then redirect."""
         chapter = (context.get("chapter") or "").lower()
+        subject = (context.get("subject") or "").lower()
         if not chapter:
             return True
 
         tokenized = set(re.findall(r"[a-zA-Z_]+", question.lower()))
         chapter_tokens = set(chapter.replace("_", " ").split())
+        subject_tokens = set(subject.replace("_", " ").split())
+        guidance_tokens = {"exam", "score", "marks", "percentage", "tips", "plan", "revision"}
 
-        # If no overlap with selected chapter terms, consider out-of-track.
-        return len(tokenized.intersection(chapter_tokens)) > 0
+        # Treat chapter questions, subject-level guidance, and exam planning as in-scope.
+        if tokenized.intersection(chapter_tokens):
+            return True
+        if tokenized.intersection(subject_tokens):
+            return True
+        if tokenized.intersection(self.SUBJECT_KEYWORDS.get(subject, set())):
+            return True
+        if tokenized.intersection(guidance_tokens):
+            return True
+        return False
+
+    def _light_out_of_scope_answer(self, question):
+        return (
+            "This looks beyond your selected chapter. I can give a quick basic idea, "
+            "but deeper clarity will be better with a teacher."
+        )
+
+    def _exam_support_reply(self, context):
+        subject = (context.get("subject") or "your subject").capitalize()
+        return (
+            f"Yes, I can help you score better in {subject}. Start with 45-min focused study blocks, "
+            "daily active recall, and 1 timed past-paper section. "
+            "If you want, I can connect you with an expert teacher for a personalized scoring plan."
+        )
 
     def _persist_escalation_signal(self, sid, question, context, reason, code, confidence):
         try:
@@ -104,63 +132,99 @@ class StudentSupportAgentV5:
                 "message": "Please ask your question in one line, and I will help step by step.",
             }
 
-        intent = self._intent(question, sid)
+        intent_data = self._infer_intent(question, context, sid)
+        intent = (intent_data.get("intent") or "learning").lower()
+        needs_teacher = bool(intent_data.get("needs_teacher", False))
+        confidence = float(intent_data.get("confidence", 0.6))
+        reason = intent_data.get("reason", "model")
+
+        if intent == "greeting":
+            if context.get("unscoped"):
+                return {
+                    "type": "message",
+                    "message": "Hi 👋 I’m ready to help. Ask any study query, exam concern, or guidance question.",
+                }
+            return {
+                "type": "message",
+                "message": "Hi 👋 Great to meet you. Ask me any concept from your selected chapter, and I’ll explain simply.",
+            }
+
+        if intent in {"learning", "confusion", "frustration", "help", "exam_support"}:
+            self.session_last_learning_query[sid] = question
+
+        if intent == "exam_support":
+            self._persist_escalation_signal(
+                sid,
+                question,
+                context,
+                reason="Student asked for exam-performance guidance",
+                code="EXAM_GUIDANCE",
+                confidence=max(confidence, 0.8),
+            )
+            return {
+                "type": "message",
+                "message": self._exam_support_reply(context),
+            }
 
         if not self._subject_in_scope(question, context):
             return {
                 "type": "message",
                 "message": (
-                    "This looks outside the selected chapter. Quick tip: switch chapter for exact help. "
-                    "Please ask under correct subject > chapter"
+                    f"{self._light_out_of_scope_answer(question)} "
+                    "Please ask under correct subject > chapter. "
+                    "If you want, I can connect you with an expert teacher."
                 ),
             }
 
-        if intent == "HELP":
+        if intent == "help":
             self._persist_escalation_signal(
                 sid,
                 question,
                 context,
-                reason="Direct teacher request",
+                reason=f"Direct teacher request ({reason})",
                 code="HELP_REQUEST",
-                confidence=0.95,
+                confidence=max(confidence, 0.9),
             )
             return {
-                "type": "escalation",
-                "message": "Got it — I can connect you to a teacher now. Would you like that?",
+                "type": "message",
+                "teacher_offer": True,
+                "message": "Absolutely — I can connect you to a teacher. Before that, do you want a quick simple explanation first?",
             }
 
-        if intent == "FRUSTRATION":
+        if intent == "frustration":
             self.session_confusion[sid] += 1
-            if self._contains_any(question.lower(), self.EMOTIONAL_SIGNAL_WORDS):
+            if needs_teacher:
                 self._persist_escalation_signal(
                     sid,
                     question,
                     context,
                     reason="Emotional urgency signal",
                     code="EMOTIONAL_SIGNAL",
-                    confidence=0.9,
+                    confidence=max(confidence, 0.9),
                 )
                 return {
-                    "type": "escalation",
+                    "type": "message",
+                    "teacher_offer": True,
                     "message": (
-                        "I hear you — this feels stressful. I can connect you to a teacher for faster support."
+                        "I hear you — this can feel stressful. I can connect you to an expert teacher whenever you want."
                     ),
                 }
 
-        if intent == "CONFUSION":
+        if intent == "confusion":
             self.session_confusion[sid] += 1
-            if self.session_confusion[sid] >= 3:
+            if self.session_confusion[sid] >= 3 or needs_teacher:
                 self._persist_escalation_signal(
                     sid,
                     question,
                     context,
                     reason="Repeated confusion after multiple explanations",
                     code="REPEATED_CONFUSION",
-                    confidence=0.88,
+                    confidence=max(confidence, 0.85),
                 )
                 return {
-                    "type": "escalation",
-                    "message": "We tried a few times. Want me to connect you to a teacher for live help?",
+                    "type": "message",
+                    "teacher_offer": True,
+                    "message": "We have tried a few ways. Want me to connect you to an expert teacher for live help?",
                 }
 
         try:
@@ -182,16 +246,21 @@ class StudentSupportAgentV5:
                     confidence=0.82,
                 )
                 return {
-                    "type": "escalation",
+                    "type": "message",
                     "message": (
-                        "I can teach basics, but this needs deeper support. Want to connect with a teacher?"
+                        f"{self._light_out_of_scope_answer(question)} "
+                        "This may be beyond your current syllabus depth. "
+                        "If you want, I can connect you with an expert teacher."
                     ),
                 }
 
-            if intent == "CONFUSION":
+            if intent == "confusion":
                 answer = f"Let’s make it simpler: {answer}"
-            elif intent == "FRUSTRATION":
+            elif intent == "frustration":
                 answer = f"You’re doing fine — let’s go step by step. {answer}"
+
+            if needs_teacher:
+                answer = f"{answer} If helpful, I can also connect you with an expert teacher."
 
             try:
                 self.cache.store(question, answer, context)
