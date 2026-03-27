@@ -65,27 +65,28 @@ class StudentSupportAgentV5:
         return model_intent
 
     def _subject_in_scope(self, question, context):
-        """Soft subject/chapter control: teach lightly, then redirect."""
-        chapter = (context.get("chapter") or "").lower()
-        subject = (context.get("subject") or "").lower()
-        if not chapter:
-            return True
+    """Soft subject/chapter control: teach lightly, then redirect."""
+    chapter = (context.get("chapter") or "").lower()
+    subject = (context.get("subject") or "").lower()
+    if not chapter:
+        return True
 
-        tokenized = set(re.findall(r"[a-zA-Z_]+", question.lower()))
-        chapter_tokens = set(chapter.replace("_", " ").split())
-        subject_tokens = set(subject.replace("_", " ").split())
-        guidance_tokens = {"exam", "score", "marks", "percentage", "tips", "plan", "revision"}
+    tokenized = set(re.findall(r"[a-zA-Z_]+", question.lower()))
+    chapter_tokens = set(chapter.replace("_", " ").split())
+    subject_tokens = set(subject.replace("_", " ").split())
+    guidance_tokens = {"exam", "score", "marks", "percentage", "tips", "plan", "revision"}
 
-        # Treat chapter questions, subject-level guidance, and exam planning as in-scope.
-        if tokenized.intersection(chapter_tokens):
-            return True
-        if tokenized.intersection(subject_tokens):
-            return True
-        if tokenized.intersection(self.SUBJECT_KEYWORDS.get(subject, set())):
-            return True
-        if tokenized.intersection(guidance_tokens):
-            return True
-        return False
+    if tokenized.intersection(chapter_tokens):
+        return True
+    if tokenized.intersection(subject_tokens):
+        return True
+    if tokenized.intersection(self.SUBJECT_KEYWORDS.get(subject, set())):
+        return True
+    if tokenized.intersection(guidance_tokens):
+        return True
+
+    # 🔥 CRITICAL CHANGE
+    return True
 
     def _light_out_of_scope_answer(self, question):
         return (
