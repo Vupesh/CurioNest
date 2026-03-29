@@ -34,7 +34,7 @@ class StudentSupportAgentV5:
         if not question:
             return {"type": "message", "message": "Please ask your question clearly."}
 
-        # 🔥 AI-based intent classification
+        # 🔥 AI Intent
         intent_data = self.rag.classify_intent(
             question,
             context,
@@ -45,24 +45,9 @@ class StudentSupportAgentV5:
         confidence = intent_data["confidence"]
         needs_teacher = intent_data["needs_teacher"]
 
-        # 🔴 Immediate escalation (AI decides)
-        if needs_teacher and intent in ["help", "frustration"]:
-            return {
-                "type": "message",
-                "teacher_offer": True,
-                "message": "I understand your situation. A teacher can guide you better. Would you like to connect?"
-            }
-
-        # 🟡 Confusion tracking (AI + attempts)
+        # 🟡 Confusion tracking
         if intent == "confusion":
             self.session_confusion[sid] += 1
-
-        if self.session_confusion[sid] >= 3:
-            return {
-                "type": "message",
-                "teacher_offer": True,
-                "message": "It seems this needs deeper guidance. Would you like help from a teacher?"
-            }
 
         # Cache
         try:
@@ -72,26 +57,31 @@ class StudentSupportAgentV5:
         except:
             pass
 
-        # RAG Answer
+        # 🔥 RAG Answer (ALWAYS FIRST)
         try:
             answer = self.rag.query(question, context)
 
             if not answer:
                 answer = "Let me explain simply: This concept can be understood step by step with a simple example."
 
-            # 🔥 AI-driven escalation scoring (NO hardcoding)
+            # 🔥 AI-driven scoring
             escalation_confidence = int(confidence * 40)
             engagement_score = min(self.session_attempts[sid] * 5, 20)
             intent_strength = int(confidence * 3)
 
-            # UX trigger
+            # 🔥 Confusion override (progressive escalation)
+            if self.session_confusion[sid] >= 3:
+                needs_teacher = True
+
+            # 🔥 UX Decision (AI-driven)
             should_prompt = self.ux_lead_engine.evaluate(
                 sid,
                 escalation_confidence,
-                engagement_score
+                engagement_score,
+                needs_teacher=needs_teacher   # ✅ CRITICAL FIX
             )
 
-            # Lead qualification
+            # 🔥 Lead Qualification (AI-driven)
             self.lead_engine.evaluate_lead(
                 session_id=sid,
                 subject=context.get("subject"),
@@ -100,7 +90,8 @@ class StudentSupportAgentV5:
                 escalation_reason=intent_data.get("reason"),
                 escalation_confidence=escalation_confidence,
                 engagement_score=engagement_score,
-                intent_strength=intent_strength
+                intent_strength=intent_strength,
+                needs_teacher=needs_teacher   # ✅ CRITICAL FIX
             )
 
             # Cache store
