@@ -66,9 +66,7 @@ function App() {
             setConfig(education);
             return;
           }
-        } catch {
-          // try the next candidate
-        }
+        } catch {}
       }
 
       setConfig(FALLBACK_CONFIG);
@@ -154,15 +152,25 @@ function App() {
     }
   };
 
+  // ✅ FIXED ONLY THIS FUNCTION
   const renderMessage = (text) => {
     if (!text) return null;
+
     if (text.includes("$$")) {
-      return text.split("$$").map((part, i) => (i % 2 ? <BlockMath key={i} math={part} /> : <span key={i}>{part}</span>));
+      return text.split("$$").map((part, i) =>
+        i % 2 ? <BlockMath key={i} math={part} /> : <span key={i}>{part}</span>
+      );
     }
+
     if (text.includes("\\(")) {
-      const clean = text.replace(/\\\(|\\\)/g, "");
-      return <InlineMath math={clean} />;
+      return text.split(/(\\\(.*?\\\))/g).map((part, i) => {
+        if (part.startsWith("\\(") && part.endsWith("\\)")) {
+          return <InlineMath key={i} math={part.slice(2, -2)} />;
+        }
+        return <span key={i}>{part}</span>;
+      });
     }
+
     return <span>{text}</span>;
   };
 
