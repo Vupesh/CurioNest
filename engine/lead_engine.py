@@ -15,7 +15,7 @@ class LeadEngine:
         self.leads = {}
 
     # ===============================
-    # Lead Qualification
+    # Lead Qualification (AI-DRIVEN)
     # ===============================
 
     def evaluate_lead(
@@ -27,20 +27,37 @@ class LeadEngine:
         escalation_reason,
         escalation_confidence,
         engagement_score,
-        intent_strength
+        intent_strength,
+        needs_teacher=False  # 🔥 NEW (AI signal)
     ):
 
         LEAD_THRESHOLD = 25
 
-        # Below threshold → not a lead
-        if escalation_confidence < LEAD_THRESHOLD:
+        # 🔥 AI OVERRIDE (PRIMARY DECISION)
+        is_high_intent = needs_teacher
+
+        # 🔥 Secondary signal (behavioral)
+        meets_threshold = escalation_confidence >= LEAD_THRESHOLD
+
+        # ❌ Not a lead only if BOTH fail
+        if not is_high_intent and not meets_threshold:
             return None
 
-        # If already exists → prevent duplicate qualification
         existing = self.leads.get(session_id)
+
         if existing:
+            # 🔥 Upgrade lead strength if stronger signal arrives
+            if escalation_confidence > existing["escalation_confidence"]:
+                existing["escalation_confidence"] = escalation_confidence
+                existing["updated_at"] = time.time()
+
+            # 🔥 Upgrade to AI-driven lead if previously weak
+            if is_high_intent:
+                existing["intent_signal"] = "AI_HIGH_INTENT"
+
             return existing
 
+        # 🔥 New lead creation
         lead = {
             "session_id": session_id,
             "subject": subject,
@@ -50,6 +67,7 @@ class LeadEngine:
             "escalation_confidence": escalation_confidence,
             "engagement_score": engagement_score,
             "intent_strength": intent_strength,
+            "intent_signal": "AI_HIGH_INTENT" if is_high_intent else "BEHAVIORAL",
             "status": self.STATUS_QUALIFIED,
             "created_at": time.time(),
             "updated_at": time.time()
